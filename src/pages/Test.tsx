@@ -138,7 +138,7 @@ export default function TestPage() {
               )}
               {phase === "playing" && (
                 <p className="text-sm text-muted-foreground">
-                  正在播放听力材料…
+                  正在播放听力材料（可同时填写挖空）…
                 </p>
               )}
               {phase === "fill_blank" && (
@@ -159,8 +159,11 @@ export default function TestPage() {
             </CardContent>
           </Card>
 
-          {/* 挖空表格 - 始终可见 */}
-          <FillBlankTable table={session.retell.table} enabled={phase === "fill_blank"} />
+          {/* 挖空表格 - 始终可见，playing 与 fill_blank 阶段都可填写 */}
+          <FillBlankTable
+            table={session.retell.table}
+            enabled={phase === "playing" || phase === "fill_blank"}
+          />
 
           {/* 录音面板 - 仅 recall_prep / recording 时 */}
           {(phase === "recall_prep" || phase === "recording") && (
@@ -235,7 +238,7 @@ export default function TestPage() {
             )}
             {phase === "playing" && (
               <p className="text-sm text-muted-foreground">
-                {isGroup ? "正在播放对话音频（将播放 2 次）…" : "正在播放对话音频…"}
+                {isGroup ? "正在播放对话音频（将播放 2 次），可提前选择答案…" : "正在播放对话音频，可提前选择答案…"}
               </p>
             )}
             {phase === "answering" && (
@@ -252,7 +255,7 @@ export default function TestPage() {
               <ShortDialogueDisplay
                 dialogue={currentDialogue.data}
                 showQuestion={phase !== "intro"}
-                showAnswer={phase === "answering"}
+                showAnswer={phase === "playing" || phase === "answering"}
               />
             )}
             {(currentDialogue.kind === "group" ||
@@ -260,7 +263,7 @@ export default function TestPage() {
               <GroupDialogueDisplay
                 dialogue={currentDialogue.data}
                 showQuestion={phase !== "intro"}
-                showAnswer={phase === "answering"}
+                showAnswer={phase === "playing" || phase === "answering"}
                 groupStartId={questionIndex}
               />
             )}
