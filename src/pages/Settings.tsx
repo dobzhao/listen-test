@@ -20,6 +20,7 @@ import { AudioSettingsPanel } from "@/components/settings/AudioSettingsPanel";
 import { LlmParamsPanel } from "@/components/settings/LlmParamsPanel";
 import { MicTest } from "@/components/settings/MicTest";
 import { KeyboardTest } from "@/components/settings/KeyboardTest";
+import { TimingPanel } from "@/components/settings/TimingPanel";
 import {
   DEFAULT_LLM_API_PATH,
   DEFAULT_TTS_API_PATH,
@@ -112,12 +113,13 @@ export default function SettingsPage() {
 
       <main className="container max-w-5xl mx-auto py-6">
         <Tabs defaultValue="llm" className="space-y-4">
-          <TabsList className="grid grid-cols-3 md:grid-cols-6 w-full">
+          <TabsList className="grid grid-cols-3 md:grid-cols-7 w-full">
             <TabsTrigger value="llm">LLM</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
             <TabsTrigger value="stt">STT</TabsTrigger>
             <TabsTrigger value="prompts">提示词</TabsTrigger>
             <TabsTrigger value="audio">音频</TabsTrigger>
+            <TabsTrigger value="timing">流程时长</TabsTrigger>
             <TabsTrigger value="device">设备测试</TabsTrigger>
           </TabsList>
 
@@ -229,6 +231,11 @@ export default function SettingsPage() {
           {/* 音频设置 */}
           <TabsContent value="audio" className="space-y-4">
             <AudioSettingsPanel />
+          </TabsContent>
+
+          {/* 流程时长 */}
+          <TabsContent value="timing" className="space-y-4">
+            <TimingPanel />
           </TabsContent>
 
           {/* 设备测试 */}

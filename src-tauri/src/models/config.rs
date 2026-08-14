@@ -108,6 +108,93 @@ impl Default for AudioConfig {
     }
 }
 
+/// 测试流程各阶段时长（毫秒）。
+///
+/// 所有字段都允许在设置界面调整，保留默认值与 Spec.md 第三节描述一致。
+/// RECORDING 时长不在此配置：受 STT/LLM 判分稳定性约束保持 90 秒固定。
+/// 每个字段使用 `#[serde(default = ...)]` 让旧配置文件缺字段时自动回退默认值。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimingConfig {
+    /// 第 1 题前的开场介绍（INTRO），仅第 1 次进入测试时显示
+    #[serde(default = "default_intro_ms")]
+    pub intro_ms: u32,
+    /// 1-4 题（短对话）PREPARE
+    #[serde(default = "default_short_dialogue_prepare_ms")]
+    pub short_dialogue_prepare_ms: u32,
+    /// 1-4 题（短对话）ANSWERING
+    #[serde(default = "default_short_dialogue_answer_ms")]
+    pub short_dialogue_answer_ms: u32,
+    /// 5-12 / 13-14 题（长对话/独白）PREPARE
+    #[serde(default = "default_group_prepare_ms")]
+    pub group_prepare_ms: u32,
+    /// 5-12 / 13-14 题两次播放之间的静音间隔
+    #[serde(default = "default_group_pause_ms")]
+    pub group_pause_ms: u32,
+    /// 5-12 / 13-14 题 ANSWERING（两题共享）
+    #[serde(default = "default_group_answer_ms")]
+    pub group_answer_ms: u32,
+    /// 15-19 题（听后转述）PREPARE
+    #[serde(default = "default_retell_prepare_ms")]
+    pub retell_prepare_ms: u32,
+    /// 15-19 题两次播放之间的静音间隔
+    #[serde(default = "default_retell_pause_ms")]
+    pub retell_pause_ms: u32,
+    /// 15-19 题 FILL_BLANK（挖空作答）
+    #[serde(default = "default_retell_fill_blank_ms")]
+    pub retell_fill_blank_ms: u32,
+    /// 15-19 题 RECALL_PREP（默读准备）
+    #[serde(default = "default_retell_recall_prep_ms")]
+    pub retell_recall_prep_ms: u32,
+}
+
+fn default_intro_ms() -> u32 {
+    10_000
+}
+fn default_short_dialogue_prepare_ms() -> u32 {
+    5_000
+}
+fn default_short_dialogue_answer_ms() -> u32 {
+    10_000
+}
+fn default_group_prepare_ms() -> u32 {
+    10_000
+}
+fn default_group_pause_ms() -> u32 {
+    2_000
+}
+fn default_group_answer_ms() -> u32 {
+    10_000
+}
+fn default_retell_prepare_ms() -> u32 {
+    30_000
+}
+fn default_retell_pause_ms() -> u32 {
+    3_000
+}
+fn default_retell_fill_blank_ms() -> u32 {
+    90_000
+}
+fn default_retell_recall_prep_ms() -> u32 {
+    120_000
+}
+
+impl Default for TimingConfig {
+    fn default() -> Self {
+        Self {
+            intro_ms: default_intro_ms(),
+            short_dialogue_prepare_ms: default_short_dialogue_prepare_ms(),
+            short_dialogue_answer_ms: default_short_dialogue_answer_ms(),
+            group_prepare_ms: default_group_prepare_ms(),
+            group_pause_ms: default_group_pause_ms(),
+            group_answer_ms: default_group_answer_ms(),
+            retell_prepare_ms: default_retell_prepare_ms(),
+            retell_pause_ms: default_retell_pause_ms(),
+            retell_fill_blank_ms: default_retell_fill_blank_ms(),
+            retell_recall_prep_ms: default_retell_recall_prep_ms(),
+        }
+    }
+}
+
 /// 整个应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -117,6 +204,7 @@ pub struct AppConfig {
     pub llm_params: LlmParams,
     pub prompts: PromptConfig,
     pub audio: AudioConfig,
+    pub timing: TimingConfig,
 }
 
 impl AppConfig {
@@ -157,6 +245,7 @@ impl Default for AppConfig {
             llm_params: LlmParams::default(),
             prompts: default_prompts(),
             audio: AudioConfig::default(),
+            timing: TimingConfig::default(),
         }
     }
 }

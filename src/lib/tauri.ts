@@ -2,7 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppConfig, ConfigResponse } from "@/types/config";
+import type { AppConfig, ConfigResponse, TimingConfig } from "@/types/config";
 import type { TestSession } from "@/types/question";
 
 // ===== 配置相关 =====
@@ -21,6 +21,10 @@ export async function resetConfig(): Promise<AppConfig> {
 
 export async function restoreDefaultPrompt(key: string): Promise<string> {
   return invoke<string>("restore_default_prompt", { args: { key } });
+}
+
+export async function restoreDefaultTiming(): Promise<TimingConfig> {
+  return invoke<TimingConfig>("restore_default_timing");
 }
 
 export async function openConfigDir(): Promise<string> {

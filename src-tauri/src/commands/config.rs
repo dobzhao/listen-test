@@ -1,6 +1,6 @@
 //! 配置读写相关 Tauri commands
 
-use crate::models::config::{default_prompts, AppConfig, ModelConfig};
+use crate::models::config::{default_prompts, AppConfig, TimingConfig};
 use crate::utils::path::config_file;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -114,35 +114,7 @@ pub fn reset_config(
     app: AppHandle,
     state: State<'_, ConfigState>,
 ) -> Result<AppConfig, String> {
-    let defaults = AppConfig {
-        llm: ModelConfig {
-            protocol: "http".into(),
-            host: "127.0.0.1".into(),
-            port: 8000,
-            api_path: AppConfig::default_llm_path().into(),
-            model: "default-llm".into(),
-            api_key: "".into(),
-        },
-        tts: ModelConfig {
-            protocol: "http".into(),
-            host: "127.0.0.1".into(),
-            port: 8000,
-            api_path: AppConfig::default_tts_path().into(),
-            model: "mlx-community/Kokoro-82M-bf16".into(),
-            api_key: "".into(),
-        },
-        stt: ModelConfig {
-            protocol: "http".into(),
-            host: "127.0.0.1".into(),
-            port: 8000,
-            api_path: AppConfig::default_stt_path().into(),
-            model: "mlx-community/whisper-large-v3-turbo-asr-fp16".into(),
-            api_key: "".into(),
-        },
-        llm_params: crate::models::config::LlmParams::default(),
-        prompts: default_prompts(),
-        audio: crate::models::config::AudioConfig::default(),
-    };
+    let defaults = AppConfig::default();
     save_config_to_disk(&app, &defaults)?;
     {
         let mut guard = state.inner.write().map_err(|e| format!("锁写入失败: {e}"))?;
@@ -169,6 +141,12 @@ pub fn restore_default_prompt(args: RestorePromptArgs) -> Result<String, String>
         "q19_scoring" => Ok(defaults.q19_scoring),
         other => Err(format!("未知 Prompt key: {other}")),
     }
+}
+
+/// 恢复流程时长为默认值（一次性还原全部 10 个阶段时长）
+#[tauri::command]
+pub fn restore_default_timing() -> Result<TimingConfig, String> {
+    Ok(TimingConfig::default())
 }
 
 /// 打开配置文件所在目录（调试用）

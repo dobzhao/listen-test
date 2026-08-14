@@ -13,6 +13,7 @@
 //! 用户作答由前端通过 `submit_answer` command 提交，存于 FlowStateContainer 中。
 
 use crate::commands::audio::AudioPlaybackState;
+use crate::models::config::TimingConfig;
 use crate::models::question::TestSession;
 use crate::services::audio_player::play_wav_blocking;
 use crate::services::timer::{Phase, PhaseTimer};
@@ -131,15 +132,20 @@ pub fn init_container_from_session(container: &FlowStateContainer, session: &Tes
 }
 
 /// 启动 1-14 题完整测试流程（异步任务）
+///
+/// `timing` 在调用前由 `start_test_flow` 从 `ConfigState` 读取后传入，
+/// 之后所有阶段时长都从此读取（不读盘、不读全局状态）。
 pub fn spawn_test_flow(
     app: AppHandle,
     container: FlowStateContainer,
     session: TestSession,
+    timing: TimingConfig,
 ) {
     init_container_from_session(&container, &session);
+    let timing = Arc::new(timing);
 
     tokio::spawn(async move {
-        let result = run_flow(app.clone(), container.clone(), session).await;
+        let result = run_flow(app.clone(), container.clone(), session, timing).await;
         match result {
             Ok(()) => {
                 info!("测试流程完成");
@@ -167,24 +173,25 @@ async fn run_flow(
     app: AppHandle,
     container: FlowStateContainer,
     session: TestSession,
+    timing: Arc<TimingConfig>,
 ) -> Result<(), String> {
     // ===== 1-4 题 =====
     for (idx, d) in session.short_dialogues.iter().enumerate() {
         let qnum = idx as u32 + 1;
-        run_short_dialogue(&app, &container, d, qnum).await?;
+        run_short_dialogue(&app, &container, d, qnum, timing.clone()).await?;
     }
 
     // ===== 5-12 题（4 段长对话，每段配 2 题） =====
     for (idx, _d) in session.long_dialogues.iter().enumerate() {
         let qnums = [5 + (idx as u32) * 2, 6 + (idx as u32) * 2];
-        run_group_dialogue(&app, &container, qnums, "d", idx + 1).await?;
+        run_group_dialogue(&app, &container, qnums, "d", idx + 1, timing.clone()).await?;
     }
 
     // ===== 13-14 题（独白） =====
-    run_group_dialogue(&app, &container, [13, 14], "m", 1).await?;
+    run_group_dialogue(&app, &container, [13, 14], "m", 1, timing.clone()).await?;
 
     // ===== 15-19 题（听后转述） =====
-    run_retell(&app, &container, &session.retell).await?;
+    run_retell(&app, &container, &session.retell, timing.clone()).await?;
 
     {
         let mut guard = container.inner.lock().unwrap();
@@ -200,6 +207,7 @@ async fn run_short_dialogue(
     container: &FlowStateContainer,
     d: &crate::models::question::ShortDialogue,
     qnum: u32,
+    timing: Arc<TimingConfig>,
 ) -> Result<(), String> {
     let qid = d.question.id;
     let audio_path = {
@@ -211,8 +219,9 @@ async fn run_short_dialogue(
     // 进入新段前清空 skip 标志（避免上题残留）
     skip_flag.store(false, Ordering::Relaxed);
 
-    // 第一次进 1-4 题时显示 10 秒介绍
+    // 第一次进 1-4 题时显示开场介绍（时长从 timing 读取）
     if qnum == 1 {
+        let intro_ms = timing.intro_ms;
         emit_state(app, container, FlowState {
             question_index: qnum,
             phase: Phase::Intro,
@@ -221,14 +230,15 @@ async fn run_short_dialogue(
             is_group: false,
             question_in_group: 0,
         });
-        let _timer = PhaseTimer::start(app.clone(), Phase::Intro, 10_000, 100);
-        interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+        let _timer = PhaseTimer::start(app.clone(), Phase::Intro, intro_ms as u64, 100);
+        interruptible_sleep(Duration::from_millis(intro_ms as u64 + 500), &skip_flag).await;
         if skip_flag.load(Ordering::Relaxed) {
             return Ok(());
         }
     }
 
-    // PREPARE (5s)
+    // PREPARE
+    let prepare_ms = timing.short_dialogue_prepare_ms;
     emit_state(app, container, FlowState {
         question_index: qnum,
         phase: Phase::Prepare,
@@ -237,8 +247,8 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
     });
-    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 5_000, 100);
-    interruptible_sleep(Duration::from_millis(5_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -259,7 +269,8 @@ async fn run_short_dialogue(
         return Ok(());
     }
 
-    // ANSWERING (10s)
+    // ANSWERING
+    let answer_ms = timing.short_dialogue_answer_ms;
     emit_state(app, container, FlowState {
         question_index: qnum,
         phase: Phase::Answering,
@@ -268,8 +279,8 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
     });
-    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
-    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(answer_ms as u64 + 500), &skip_flag).await;
 
     info!(question_id = qid, "第 {} 题流程完成", qnum);
     Ok(())
@@ -282,6 +293,7 @@ async fn run_group_dialogue(
     qnums: [u32; 2],
     audio_prefix: &str,
     audio_idx: usize,
+    timing: Arc<TimingConfig>,
 ) -> Result<(), String> {
     let first = qnums[0];
     let audio_key = format!("{audio_prefix}{audio_idx}");
@@ -292,7 +304,8 @@ async fn run_group_dialogue(
     let skip_flag = skip_flag_clone(container);
     skip_flag.store(false, Ordering::Relaxed);
 
-    // PREPARE (10s)
+    // PREPARE
+    let prepare_ms = timing.group_prepare_ms;
     emit_state(
         app,
         container,
@@ -305,8 +318,8 @@ async fn run_group_dialogue(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 10_000, 100);
-    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -331,12 +344,13 @@ async fn run_group_dialogue(
         return Ok(());
     }
 
-    // 2 秒静音间隔
+    // 静音间隔（两次播放之间）
+    let pause_ms = timing.group_pause_ms;
     let _ = app.emit(
         AUDIO_PLAY_EVENT,
         &serde_json::json!({ "path": null, "loop": false }),
     );
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    interruptible_sleep(Duration::from_millis(pause_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -349,7 +363,8 @@ async fn run_group_dialogue(
         return Ok(());
     }
 
-    // ANSWERING (10s)
+    // ANSWERING
+    let answer_ms = timing.group_answer_ms;
     emit_state(
         app,
         container,
@@ -362,8 +377,8 @@ async fn run_group_dialogue(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
-    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(answer_ms as u64 + 500), &skip_flag).await;
 
     info!(qnums = ?qnums, "组题流程完成");
     Ok(())
@@ -445,13 +460,13 @@ async fn play_audio(app: &AppHandle, path: Option<String>) {
 
 /// 15-19 题：听后转述完整流程
 ///
-/// 阶段：
-/// 1. PREPARE (30s)：展示挖空表格，提示"准备聆听"
-/// 2. PLAYING #1 → 3s 静音 → PLAYING #2（共 2 次播放）
-/// 3. FILL_BLANK (90s)：用户填写 15-18 题空格
+/// 阶段（时长从 `timing` 读取，RECORDING 保持 90s 固定）：
+/// 1. PREPARE：展示挖空表格，提示"准备聆听"
+/// 2. PLAYING #1 → 静音 → PLAYING #2（共 2 次播放）
+/// 3. FILL_BLANK：用户填写 15-18 题空格
 /// 4. PLAYING #3（第 3 次播放），挖空表格保持可见
-/// 5. RECALL_PREP (120s)：默读准备（不可听音频）
-/// 6. RECORDING (90s)：自动开始录音
+/// 5. RECALL_PREP：默读准备（不可听音频）
+/// 6. RECORDING（90s 固定）：自动开始录音
 ///
 /// "下一题"按钮（skip_requested）在 1-3 阶段可触发：直接跳到 PLAYING #3，
 /// 4-6 阶段不接受跳过（用户需要听第三遍 / 默读 / 录音）。
@@ -459,6 +474,7 @@ async fn run_retell(
     app: &AppHandle,
     container: &FlowStateContainer,
     _retell: &crate::models::question::RetellMaterial,
+    timing: Arc<TimingConfig>,
 ) -> Result<(), String> {
     let audio_path = {
         let guard = container.inner.lock().unwrap();
@@ -469,7 +485,8 @@ async fn run_retell(
 
     let base_progress = 14.0 / 19.0; // 14 题已完成
 
-    // 1. PREPARE (30s) — 可跳过
+    // 1. PREPARE — 可跳过
+    let prepare_ms = timing.retell_prepare_ms;
     emit_state(
         app,
         container,
@@ -482,13 +499,13 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 30_000, 100);
-    interruptible_sleep(Duration::from_millis(30_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         // 跳到 PLAYING #3 之前先清零，让 PLAYING #3 顺利完成
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container).await;
+        finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
@@ -511,20 +528,21 @@ async fn run_retell(
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container).await;
+        finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
-    // 3 秒静音间隔 — 可跳过
+    // 静音间隔 — 可跳过
+    let pause_ms = timing.retell_pause_ms;
     let _ = app.emit(
         AUDIO_PLAY_EVENT,
         &serde_json::json!({ "path": null, "loop": false }),
     );
-    interruptible_sleep(Duration::from_millis(3_500), &skip_flag).await;
+    interruptible_sleep(Duration::from_millis(pause_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container).await;
+        finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
@@ -535,11 +553,12 @@ async fn run_retell(
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container).await;
+        finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
-    // 3. FILL_BLANK (90s) — 可跳过
+    // 3. FILL_BLANK — 可跳过
+    let fill_ms = timing.retell_fill_blank_ms;
     emit_state(
         app,
         container,
@@ -552,19 +571,19 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, 90_000, 100);
-    interruptible_sleep(Duration::from_millis(90_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, fill_ms as u64, 100);
+    interruptible_sleep(Duration::from_millis(fill_ms as u64 + 500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
-        finish_recording_phases(app, container).await;
+        finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
     // 4-6 阶段按正常顺序跑完（不允许再跳过）
     skip_flag.store(false, Ordering::Relaxed);
     goto_playing_3(app, container, audio_path.as_ref()).await;
-    finish_recording_phases(app, container).await;
+    finish_recording_phases(app, container, timing.clone()).await;
     Ok(())
 }
 
@@ -593,9 +612,17 @@ async fn goto_playing_3(
 }
 
 /// 15-19 题第 5-6 步：RECALL_PREP + RECORDING
-async fn finish_recording_phases(app: &AppHandle, container: &FlowStateContainer) {
+///
+/// RECORDING 时长固定 90 秒（不受 TimingConfig 控制）：
+/// Spec 十三节明确约束，录音时长受 STT/LLM 判分稳定性限制。
+async fn finish_recording_phases(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    timing: Arc<TimingConfig>,
+) {
     let base_progress = 14.0 / 19.0;
-    // 5. RECALL_PREP (120s)
+    // 5. RECALL_PREP
+    let recall_ms = timing.retell_recall_prep_ms;
     emit_state(
         app,
         container,
@@ -608,13 +635,14 @@ async fn finish_recording_phases(app: &AppHandle, container: &FlowStateContainer
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::RecallPrep, 120_000, 100);
-    sleep(Duration::from_millis(120_500)).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::RecallPrep, recall_ms as u64, 100);
+    sleep(Duration::from_millis(recall_ms as u64 + 500)).await;
 
-    // 6. RECORDING (90s)
+    // 6. RECORDING（固定 90 秒，不读取 TimingConfig）
+    let recording_ms: u64 = 90_000;
     let _ = app.emit(
         RECORD_START_EVENT,
-        &serde_json::json!({ "durationMs": 90_000 }),
+        &serde_json::json!({ "durationMs": recording_ms }),
     );
     emit_state(
         app,
@@ -628,8 +656,8 @@ async fn finish_recording_phases(app: &AppHandle, container: &FlowStateContainer
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Recording, 90_000, 100);
-    sleep(Duration::from_millis(90_500)).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Recording, recording_ms, 100);
+    sleep(Duration::from_millis(recording_ms + 500)).await;
 
     let _ = app.emit(RECORD_STOP_EVENT, &serde_json::json!({}));
     info!("15-19 题流程完成");

@@ -1,12 +1,13 @@
 //! 测试流程 Tauri commands
 //!
-//! - `start_test_flow`：从内存中的 TestSession 启动 1-14 题流程
+//! - `start_test_flow`：从内存中的 TestSession 启动 1-14 题流程；时长从 ConfigState 读取
 //! - `submit_answer`：前端用户点击选项时调用，记录作答
 //! - `get_flow_state`：前端可拉取当前阶段状态（也可走事件订阅）
 //! - `get_answer_set`：返回 1-14 题作答结果（用于结算页）
 //! - `skip_to_next`：前端点击"下一题"时调用，停止当前播放并快速进入下一阶段
 
 use crate::commands::audio::AudioPlaybackState;
+use crate::commands::config::ConfigState;
 use crate::commands::test_session::SessionState;
 use crate::services::test_flow::{spawn_test_flow, FlowState, FlowStateContainer};
 use std::sync::atomic::Ordering;
@@ -33,11 +34,14 @@ pub struct StartFlowResponse {
 /// 启动测试流程（异步）
 ///
 /// 流程推进会通过 `test-flow-state` / `test-flow-finished` 事件通知前端。
+/// 各阶段时长从 ConfigState 读取后冻结传入异步任务，避免测试中途修改配置导致
+/// 计时跳变。
 #[tauri::command]
 pub async fn start_test_flow(
     app: tauri::AppHandle,
     flow: tauri::State<'_, FlowGlobal>,
     session_state: tauri::State<'_, SessionState>,
+    config_state: tauri::State<'_, ConfigState>,
 ) -> Result<StartFlowResponse, String> {
     let session = {
         let guard = session_state
@@ -47,7 +51,16 @@ pub async fn start_test_flow(
         guard.clone().ok_or_else(|| "尚未生成测试会话，请先预生成".to_string())?
     };
 
-    spawn_test_flow(app, flow.container.clone(), session);
+    // 读取流程时长配置（用快照，不用读锁常驻）
+    let timing = {
+        let guard = config_state
+            .inner
+            .read()
+            .map_err(|e| format!("配置锁读取失败: {e}"))?;
+        guard.timing.clone()
+    };
+
+    spawn_test_flow(app, flow.container.clone(), session, timing);
     Ok(StartFlowResponse { ok: true })
 }
 

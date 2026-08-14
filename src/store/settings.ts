@@ -5,6 +5,7 @@ import {
   AppConfig,
   ConfigResponse,
   PromptKey,
+  TimingConfig,
   defaultAppConfig,
 } from "@/types/config";
 import {
@@ -12,6 +13,7 @@ import {
   saveConfig,
   resetConfig,
   restoreDefaultPrompt,
+  restoreDefaultTiming,
 } from "@/lib/tauri";
 
 interface SettingsState {
@@ -30,8 +32,10 @@ interface SettingsState {
   updateStt: (patch: Partial<AppConfig["stt"]>) => void;
   updateLlmParams: (patch: Partial<AppConfig["llm_params"]>) => void;
   updateAudio: (patch: Partial<AppConfig["audio"]>) => void;
+  updateTiming: (patch: Partial<TimingConfig>) => void;
   updatePrompt: (key: PromptKey, value: string) => void;
   restoreOnePrompt: (key: PromptKey) => Promise<void>;
+  restoreDefaultTiming: () => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -84,6 +88,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     })),
   updateAudio: (patch) =>
     set((s) => ({ config: { ...s.config, audio: { ...s.config.audio, ...patch } } })),
+  updateTiming: (patch) =>
+    set((s) => ({ config: { ...s.config, timing: { ...s.config.timing, ...patch } } })),
   updatePrompt: (key, value) =>
     set((s) => ({
       config: { ...s.config, prompts: { ...s.config.prompts, [key]: value } },
@@ -92,5 +98,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   restoreOnePrompt: async (key) => {
     const value = await restoreDefaultPrompt(key);
     get().updatePrompt(key, value);
+  },
+
+  restoreDefaultTiming: async () => {
+    const fresh = await restoreDefaultTiming();
+    get().updateTiming(fresh);
   },
 }));

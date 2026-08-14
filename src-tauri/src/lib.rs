@@ -39,6 +39,7 @@ pub fn run() {
             commands::config::save_config,
             commands::config::reset_config,
             commands::config::restore_default_prompt,
+            commands::config::restore_default_timing,
             commands::config::open_config_dir,
             // 模型连接测试
             commands::llm::test_llm_connection,

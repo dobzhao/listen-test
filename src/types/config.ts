@@ -31,6 +31,24 @@ export interface AudioConfig {
   tts_silence_ms: number;
 }
 
+/**
+ * 测试流程各阶段时长（毫秒）。
+ * 与 Rust `models::config::TimingConfig` 字段一一对应。
+ * RECORDING 时长不在此配置，由后端固定为 90 秒。
+ */
+export interface TimingConfig {
+  intro_ms: number;
+  short_dialogue_prepare_ms: number;
+  short_dialogue_answer_ms: number;
+  group_prepare_ms: number;
+  group_pause_ms: number;
+  group_answer_ms: number;
+  retell_prepare_ms: number;
+  retell_pause_ms: number;
+  retell_fill_blank_ms: number;
+  retell_recall_prep_ms: number;
+}
+
 export interface AppConfig {
   llm: ModelConfig;
   tts: ModelConfig;
@@ -38,6 +56,7 @@ export interface AppConfig {
   llm_params: LlmParams;
   prompts: PromptConfig;
   audio: AudioConfig;
+  timing: TimingConfig;
 }
 
 export interface ConfigResponse {
@@ -124,6 +143,18 @@ export function defaultAppConfig(): AppConfig {
       playback_volume: 1.0,
       mic_gain: 1.0,
       tts_silence_ms: 400,
+    },
+    timing: {
+      intro_ms: 10000,
+      short_dialogue_prepare_ms: 5000,
+      short_dialogue_answer_ms: 10000,
+      group_prepare_ms: 10000,
+      group_pause_ms: 2000,
+      group_answer_ms: 10000,
+      retell_prepare_ms: 30000,
+      retell_pause_ms: 3000,
+      retell_fill_blank_ms: 90000,
+      retell_recall_prep_ms: 120000,
     },
   };
 }
