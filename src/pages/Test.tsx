@@ -16,11 +16,7 @@ import {
   PHASE_LABELS,
   useTestFlowStore,
 } from "@/store/testFlow";
-import {
-  useTestFlowEvents,
-  useAudioPlayHandler,
-} from "@/hooks/useTestFlowEvents";
-import { useAudioPlayer } from "@/hooks/useAudioPlayer";
+import { useTestFlowEvents } from "@/hooks/useTestFlowEvents";
 import { useRecorder } from "@/hooks/useRecorder";
 import { GlobalHeader } from "@/components/test/GlobalHeader";
 import { PhaseCountdown } from "@/components/test/PhaseCountdown";
@@ -49,11 +45,10 @@ export default function TestPage() {
   // 订阅所有后端事件
   useTestFlowEvents();
 
-  // 音频播放
-  const { play } = useAudioPlayer();
-  useAudioPlayHandler((path, loop) => {
-    play(path, loop);
-  });
+  // 音频播放由后端 test_flow 直接驱动（play_wav_blocking），
+  // 前端通过 store.audioPath 仅作 UI 指示，不再重复触发后端播放。
+  // 修复历史：之前前端 useAudioPlayer + useAudioPlayHandler 同时调用了
+  // playAudioBackground，导致与后端播放叠加，第二轮播放时尤为明显。
 
   // 录音
   const recorder = useRecorder();
