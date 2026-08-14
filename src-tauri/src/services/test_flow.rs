@@ -12,14 +12,16 @@
 //!
 //! 用户作答由前端通过 `submit_answer` command 提交，存于 FlowStateContainer 中。
 
+use crate::commands::audio::AudioPlaybackState;
 use crate::models::question::TestSession;
 use crate::services::audio_player::play_wav_blocking;
 use crate::services::timer::{Phase, PhaseTimer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
@@ -68,6 +70,8 @@ pub struct FlowStateInner {
     pub group_membership: HashMap<u32, u32>, // question_id -> group_start_id
     /// 音频路径映射
     pub audio_paths: HashMap<String, String>,
+    /// 前端点击"下一题"触发的跳转请求；各 run_* 阶段定期检查
+    pub skip_requested: Arc<AtomicBool>,
 }
 
 impl Default for FlowStateInner {
@@ -79,6 +83,7 @@ impl Default for FlowStateInner {
             correct_answers: HashMap::new(),
             group_membership: HashMap::new(),
             audio_paths: HashMap::new(),
+            skip_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -201,6 +206,10 @@ async fn run_short_dialogue(
         let guard = container.inner.lock().unwrap();
         guard.audio_paths.get(&format!("q{qnum}")).cloned()
     };
+    let skip_flag = skip_flag_clone(container);
+
+    // 进入新段前清空 skip 标志（避免上题残留）
+    skip_flag.store(false, Ordering::Relaxed);
 
     // 第一次进 1-4 题时显示 10 秒介绍
     if qnum == 1 {
@@ -213,7 +222,10 @@ async fn run_short_dialogue(
             question_in_group: 0,
         });
         let _timer = PhaseTimer::start(app.clone(), Phase::Intro, 10_000, 100);
-        sleep(Duration::from_millis(10_500)).await;
+        interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+        if skip_flag.load(Ordering::Relaxed) {
+            return Ok(());
+        }
     }
 
     // PREPARE (5s)
@@ -226,7 +238,10 @@ async fn run_short_dialogue(
         question_in_group: 0,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 5_000, 100);
-    sleep(Duration::from_millis(5_500)).await;
+    interruptible_sleep(Duration::from_millis(5_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // PLAYING (1x, 后端 rodio 播放)
     emit_state(app, container, FlowState {
@@ -239,7 +254,10 @@ async fn run_short_dialogue(
     });
     play_audio(app, audio_path.clone()).await;
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // ANSWERING (10s)
     emit_state(app, container, FlowState {
@@ -251,7 +269,7 @@ async fn run_short_dialogue(
         question_in_group: 0,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
-    sleep(Duration::from_millis(10_500)).await;
+    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
 
     info!(question_id = qid, "第 {} 题流程完成", qnum);
     Ok(())
@@ -271,6 +289,8 @@ async fn run_group_dialogue(
         let guard = container.inner.lock().unwrap();
         guard.audio_paths.get(&audio_key).cloned()
     };
+    let skip_flag = skip_flag_clone(container);
+    skip_flag.store(false, Ordering::Relaxed);
 
     // PREPARE (10s)
     emit_state(
@@ -286,7 +306,10 @@ async fn run_group_dialogue(
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 10_000, 100);
-    sleep(Duration::from_millis(10_500)).await;
+    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // PLAYING #1 (后端 rodio 播放)
     emit_state(
@@ -303,19 +326,28 @@ async fn run_group_dialogue(
     );
     play_audio(app, audio_path.clone()).await;
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // 2 秒静音间隔
     let _ = app.emit(
         AUDIO_PLAY_EVENT,
         &serde_json::json!({ "path": null, "loop": false }),
     );
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // PLAYING #2
     play_audio(app, audio_path.clone()).await;
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     // ANSWERING (10s)
     emit_state(
@@ -331,7 +363,7 @@ async fn run_group_dialogue(
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
-    sleep(Duration::from_millis(10_500)).await;
+    interruptible_sleep(Duration::from_millis(10_500), &skip_flag).await;
 
     info!(qnums = ?qnums, "组题流程完成");
     Ok(())
@@ -347,9 +379,29 @@ fn emit_state(app: &AppHandle, container: &FlowStateContainer, state: FlowState)
     }
 }
 
-/// 后端播放音频：使用 rodio 同步播放（阻塞当前 tokio task 直到播放完成）
+/// 取出当前实例的 skip_requested 引用（Arc clone）
+fn skip_flag_clone(container: &FlowStateContainer) -> Arc<AtomicBool> {
+    container.inner.lock().unwrap().skip_requested.clone()
+}
+
+/// 可中断睡眠：每 100ms 检查一次 skip_flag，若被设置则提前返回
+async fn interruptible_sleep(duration: Duration, skip_flag: &Arc<AtomicBool>) {
+    let step = Duration::from_millis(100);
+    let mut remaining = duration;
+    while !remaining.is_zero() {
+        if skip_flag.load(Ordering::Relaxed) {
+            return;
+        }
+        let chunk = step.min(remaining);
+        sleep(chunk).await;
+        remaining = remaining.saturating_sub(chunk);
+    }
+}
+
+/// 后端播放音频：使用 rodio 同步播放（阻塞当前 tokio task 直到播放完成或 stop_flag 被设置）
 ///
 /// 同时通过 audio-play 事件通知前端 UI 更新（仅用于显示指示器）。
+/// stop_flag 注册到全局 AudioPlaybackState，使得 `stop_audio` 与 `skip_to_next` 可即时切歌。
 async fn play_audio(app: &AppHandle, path: Option<String>) {
     let Some(p) = path else {
         return;
@@ -366,8 +418,24 @@ async fn play_audio(app: &AppHandle, path: Option<String>) {
         return;
     }
 
-    // 用 spawn_blocking 跑同步的 rodio 播放
-    let result = tokio::task::spawn_blocking(move || play_wav_blocking(&pb)).await;
+    // 创建本轮播放的停止信号，注册到全局 state 以便外部 stop_audio 可切歌
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let audio_state = app.state::<AudioPlaybackState>();
+        let mut slot = audio_state.active_stop_flag.lock().unwrap();
+        *slot = Some(stop_flag.clone());
+    }
+
+    let flag_for_play = stop_flag.clone();
+    let result = tokio::task::spawn_blocking(move || play_wav_blocking(&pb, flag_for_play)).await;
+
+    // 播放结束（无论自然完成还是被切歌）后清空全局 stop_flag 引用
+    {
+        let audio_state = app.state::<AudioPlaybackState>();
+        let mut slot = audio_state.active_stop_flag.lock().unwrap();
+        *slot = None;
+    }
+
     match result {
         Ok(Ok(())) => info!(path = %p, "音频播放完成"),
         Ok(Err(e)) => error!(error = %e, path = %p, "音频播放失败"),
@@ -384,6 +452,9 @@ async fn play_audio(app: &AppHandle, path: Option<String>) {
 /// 4. PLAYING #3（第 3 次播放），挖空表格保持可见
 /// 5. RECALL_PREP (120s)：默读准备（不可听音频）
 /// 6. RECORDING (90s)：自动开始录音
+///
+/// "下一题"按钮（skip_requested）在 1-3 阶段可触发：直接跳到 PLAYING #3，
+/// 4-6 阶段不接受跳过（用户需要听第三遍 / 默读 / 录音）。
 async fn run_retell(
     app: &AppHandle,
     container: &FlowStateContainer,
@@ -393,10 +464,12 @@ async fn run_retell(
         let guard = container.inner.lock().unwrap();
         guard.audio_paths.get("retell").cloned()
     };
+    let skip_flag = skip_flag_clone(container);
+    skip_flag.store(false, Ordering::Relaxed);
 
     let base_progress = 14.0 / 19.0; // 14 题已完成
 
-    // 1. PREPARE (30s)
+    // 1. PREPARE (30s) — 可跳过
     emit_state(
         app,
         container,
@@ -410,9 +483,16 @@ async fn run_retell(
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 30_000, 100);
-    sleep(Duration::from_millis(30_500)).await;
+    interruptible_sleep(Duration::from_millis(30_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        // 跳到 PLAYING #3 之前先清零，让 PLAYING #3 顺利完成
+        skip_flag.store(false, Ordering::Relaxed);
+        goto_playing_3(app, container, audio_path.as_ref()).await;
+        finish_recording_phases(app, container).await;
+        return Ok(());
+    }
 
-    // 2. PLAYING #1 (后端 rodio 播放)
+    // 2. PLAYING #1 (后端 rodio 播放) — 可跳过
     emit_state(
         app,
         container,
@@ -427,21 +507,39 @@ async fn run_retell(
     );
     play_audio(app, audio_path.clone()).await;
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        skip_flag.store(false, Ordering::Relaxed);
+        goto_playing_3(app, container, audio_path.as_ref()).await;
+        finish_recording_phases(app, container).await;
+        return Ok(());
+    }
 
-    // 3 秒静音间隔
+    // 3 秒静音间隔 — 可跳过
     let _ = app.emit(
         AUDIO_PLAY_EVENT,
         &serde_json::json!({ "path": null, "loop": false }),
     );
-    sleep(Duration::from_millis(3_500)).await;
+    interruptible_sleep(Duration::from_millis(3_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        skip_flag.store(false, Ordering::Relaxed);
+        goto_playing_3(app, container, audio_path.as_ref()).await;
+        finish_recording_phases(app, container).await;
+        return Ok(());
+    }
 
-    // PLAYING #2
+    // PLAYING #2 — 可跳过
     play_audio(app, audio_path.clone()).await;
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100);
-    sleep(Duration::from_millis(2_500)).await;
+    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        skip_flag.store(false, Ordering::Relaxed);
+        goto_playing_3(app, container, audio_path.as_ref()).await;
+        finish_recording_phases(app, container).await;
+        return Ok(());
+    }
 
-    // 3. FILL_BLANK (90s)
+    // 3. FILL_BLANK (90s) — 可跳过
     emit_state(
         app,
         container,
@@ -455,9 +553,28 @@ async fn run_retell(
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, 90_000, 100);
-    sleep(Duration::from_millis(90_500)).await;
+    interruptible_sleep(Duration::from_millis(90_500), &skip_flag).await;
+    if skip_flag.load(Ordering::Relaxed) {
+        skip_flag.store(false, Ordering::Relaxed);
+        goto_playing_3(app, container, audio_path.as_ref()).await;
+        finish_recording_phases(app, container).await;
+        return Ok(());
+    }
 
-    // 4. PLAYING #3 (后端 rodio 播放)
+    // 4-6 阶段按正常顺序跑完（不允许再跳过）
+    skip_flag.store(false, Ordering::Relaxed);
+    goto_playing_3(app, container, audio_path.as_ref()).await;
+    finish_recording_phases(app, container).await;
+    Ok(())
+}
+
+/// 15-19 题第 4 步 PLAYING #3
+async fn goto_playing_3(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    audio_path: Option<&String>,
+) {
+    let base_progress = 14.0 / 19.0;
     emit_state(
         app,
         container,
@@ -465,15 +582,19 @@ async fn run_retell(
             question_index: 15,
             phase: Phase::Playing,
             progress: base_progress + 0.5,
-            audio_path: audio_path.clone(),
+            audio_path: audio_path.cloned(),
             is_group: true,
             question_in_group: 0,
         },
     );
-    play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100);
+    play_audio(app, audio_path.cloned()).await;
+    // 此处 sleep 不再受 skip_flag 影响（已清零）；仍给一个固定余量。
     sleep(Duration::from_millis(2_500)).await;
+}
 
+/// 15-19 题第 5-6 步：RECALL_PREP + RECORDING
+async fn finish_recording_phases(app: &AppHandle, container: &FlowStateContainer) {
+    let base_progress = 14.0 / 19.0;
     // 5. RECALL_PREP (120s)
     emit_state(
         app,
@@ -491,11 +612,10 @@ async fn run_retell(
     sleep(Duration::from_millis(120_500)).await;
 
     // 6. RECORDING (90s)
-    // 通知前端"开始录音"
-    let _ = app.emit(RECORD_START_EVENT, &serde_json::json!({
-        "durationMs": 90_000
-    }));
-
+    let _ = app.emit(
+        RECORD_START_EVENT,
+        &serde_json::json!({ "durationMs": 90_000 }),
+    );
     emit_state(
         app,
         container,
@@ -511,9 +631,6 @@ async fn run_retell(
     let _timer = PhaseTimer::start(app.clone(), Phase::Recording, 90_000, 100);
     sleep(Duration::from_millis(90_500)).await;
 
-    // 通知前端"停止录音"
     let _ = app.emit(RECORD_STOP_EVENT, &serde_json::json!({}));
-
     info!("15-19 题流程完成");
-    Ok(())
 }

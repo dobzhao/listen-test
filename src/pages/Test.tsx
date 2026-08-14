@@ -1,6 +1,6 @@
 // 19 题测试主页面：根据 phase 切换子组件展示
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Card,
@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Play, FileText } from "lucide-react";
+import { Loader2, Play, FileText, SkipForward } from "lucide-react";
 import { useTestStore } from "@/store/test";
 import {
   PHASE_LABELS,
@@ -26,7 +26,50 @@ import {
 } from "@/components/test/QuestionDisplay";
 import { FillBlankTable } from "@/components/test/FillBlankTable";
 import { RecorderPanel } from "@/components/test/RecorderPanel";
-import { startTestFlow } from "@/lib/tauri";
+import { skipToNext, startTestFlow } from "@/lib/tauri";
+
+/** 判断当前段对应题目的作答是否完整（用于"下一题"按钮的 enabled 计算） */
+function computeSegmentComplete(
+  session: ReturnType<typeof useTestStore.getState>["session"],
+  questionIndex: number,
+  answers: Record<number, string | null>
+): boolean {
+  if (!session || questionIndex < 1) return false;
+  // 1-4：单题，qid 即 questionIndex
+  if (questionIndex <= 4) {
+    const d = session.short_dialogues[questionIndex - 1];
+    return !!d && !!answers[d.question.id];
+  }
+  // 5-12：每段 2 题
+  if (questionIndex <= 12) {
+    const idx = Math.floor((questionIndex - 5) / 2);
+    const d = session.long_dialogues[idx];
+    if (!d) return false;
+    return d.questions.every((q) => !!answers[q.id]);
+  }
+  // 13-14：独白 2 题
+  if (questionIndex <= 14) {
+    return session.monologue.questions.every((q) => !!answers[q.id]);
+  }
+  // 15-19：4 个挖空均需非空文本
+  const filled = [15, 16, 17, 18].every(
+    (id) => typeof answers[id] === "string" && (answers[id] as string).trim().length > 0
+  );
+  return filled;
+}
+
+/** 判断当前阶段是否允许显示"下一题"按钮 */
+function isNextVisible(questionIndex: number, phase: string | null): boolean {
+  if (!phase) return false;
+  // intro 阶段：尚未开始作答，按钮不显示
+  if (phase === "intro") return false;
+  // 15-19：仅 prepare / playing / fill_blank 可跳；recall_prep / recording 不跳
+  if (questionIndex >= 15) {
+    return phase === "prepare" || phase === "playing" || phase === "fill_blank";
+  }
+  // 1-14：除 intro 外都显示
+  return true;
+}
 
 export default function TestPage() {
   const navigate = useNavigate();
@@ -41,6 +84,7 @@ export default function TestPage() {
   const isGroup = useTestFlowStore((s) => s.isGroup);
   const finished = useTestFlowStore((s) => s.finished);
   const error = useTestFlowStore((s) => s.error);
+  const answers = useTestFlowStore((s) => s.answers);
 
   // 订阅所有后端事件
   useTestFlowEvents();
@@ -74,6 +118,13 @@ export default function TestPage() {
     }
     return null; // 15-19 不走 dialogue 流
   }, [session, questionIndex]);
+
+  // "下一题"按钮的可点击状态：本段题目作答完整才允许跳转
+  const nextEnabled = useMemo(
+    () => computeSegmentComplete(session, questionIndex, answers),
+    [session, questionIndex, answers]
+  );
+  const nextVisible = isNextVisible(questionIndex, phase);
 
   // 完成后跳转结算页（Phase 5 实现）
   useEffect(() => {
@@ -153,6 +204,12 @@ export default function TestPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* "下一题"按钮 — 15-19 仅在 prepare/playing/fill_blank 显示 */}
+          <NextQuestionButton
+            visible={nextVisible}
+            enabled={nextEnabled}
+          />
 
           {/* 挖空表格 - 始终可见，playing 与 fill_blank 阶段都可填写 */}
           <FillBlankTable
@@ -243,6 +300,12 @@ export default function TestPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* "下一题"按钮 — 完成本段作答后可直接跳到下一段 */}
+        <NextQuestionButton
+          visible={nextVisible}
+          enabled={nextEnabled}
+        />
 
         {currentDialogue && (
           <div className="space-y-4">
@@ -356,4 +419,48 @@ function TestStartCard({ onStart }: { onStart: () => Promise<unknown> }) {
   );
 }
 
-import { useState } from "react";
+/**
+ * "下一题"按钮：根据当前阶段与作答情况控制 enabled。
+ *
+ * - 1-14 题：当前题目作答完整可点击（组题需两题都答）
+ * - 15-19 题：4 个挖空均填写内容，且当前阶段属于可跳段（prepare/playing/fill_blank）
+ * - 点击后调用 skipToNext：后端停止当前播放并跳过剩余计时
+ */
+function NextQuestionButton({
+  visible,
+  enabled,
+}: {
+  visible: boolean;
+  enabled: boolean;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  if (!visible) return null;
+  return (
+    <div className="flex justify-end">
+      <Button
+        variant="default"
+        disabled={!enabled || submitting}
+        title={
+          enabled
+            ? "停止当前音频并直接进入下一段录音"
+            : "请先完成本段题目作答"
+        }
+        onClick={async () => {
+          if (submitting) return;
+          setSubmitting(true);
+          try {
+            await skipToNext();
+          } catch (e) {
+            console.error("skip_to_next 失败", e);
+          } finally {
+            // 防止连点；后端状态机会在 200ms 内推进
+            setTimeout(() => setSubmitting(false), 800);
+          }
+        }}
+      >
+        <SkipForward className="w-4 h-4 mr-2" />
+        下一题
+      </Button>
+    </div>
+  );
+}

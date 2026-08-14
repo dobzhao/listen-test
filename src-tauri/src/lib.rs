@@ -65,6 +65,7 @@ pub fn run() {
             commands::test_flow::get_flow_state,
             commands::test_flow::get_answer_set,
             commands::test_flow::reset_test_flow,
+            commands::test_flow::skip_to_next,
             // 录音
             commands::recorder::start_recording,
             commands::recorder::stop_recording,

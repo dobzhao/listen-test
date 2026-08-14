@@ -207,6 +207,15 @@ export async function resetTestFlow(): Promise<void> {
   await invoke("reset_test_flow");
 }
 
+/**
+ * 用户在测试过程中点击"下一题"按钮：
+ * - 立即停止当前 rodio 播放（切歌）
+ * - 让后端 run_* 流程跳出当前 sleep 并进入下一段
+ */
+export async function skipToNext(): Promise<void> {
+  await invoke("skip_to_next");
+}
+
 export async function onTimerTick(
   handler: (payload: TimerTickPayload) => void
 ): Promise<UnlistenFn> {
