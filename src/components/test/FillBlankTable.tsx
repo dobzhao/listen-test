@@ -28,8 +28,9 @@ export function FillBlankTable({ table, enabled }: Props) {
     setAnswer(blankId, value);
     try {
       await submitAnswer(blankId, value);
-    } catch {
-      // ignore
+    } catch (e) {
+      // 不要静默吞错 — 否则后端落库失败时前端看起来"已填"但判分全 0
+      console.error("submit_answer 失败", e);
     }
   };
 

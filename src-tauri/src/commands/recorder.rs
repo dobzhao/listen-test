@@ -28,6 +28,7 @@ pub fn start_recording(recorder: tauri::State<'_, RecorderGlobal>) -> Result<(),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StopRecordingArgs {
     pub output_path: String,
 }

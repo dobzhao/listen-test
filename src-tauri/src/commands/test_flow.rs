@@ -52,6 +52,7 @@ pub async fn start_test_flow(
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmitAnswerArgs {
     pub question_id: u32,
     /// "A" / "B" / "C" 或 None 表示清除作答

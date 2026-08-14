@@ -47,6 +47,9 @@ export function useRecorder(): RecorderHookResult {
   const timerRef = useRef<number | null>(null);
   const pollRef = useRef<number | null>(null);
   const outputPathRef = useRef<string | null>(null);
+  // 用 ref 镜像 isRecording，避免 stopLocalRecording 闭包里读到旧值
+  // （setTimeout 抓的是录音开始那一刻的闭包，那时 isRecording=false）
+  const isRecordingRef = useRef(false);
 
   const stopLocalRecording = useCallback(async () => {
     if (timerRef.current !== null) {
@@ -57,26 +60,42 @@ export function useRecorder(): RecorderHookResult {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
     }
-    if (!isRecording || !outputPathRef.current) return;
+    // 用 ref 判断而不是 state 闭包，避免 stale closure 导致自动停止时静默 no-op
+    if (!isRecordingRef.current || !outputPathRef.current) {
+      return;
+    }
+    const pathToSave = outputPathRef.current;
+    // 先清空 ref，避免并发触发时重复 stop
+    isRecordingRef.current = false;
+    outputPathRef.current = null;
     try {
-      const resp = await stopRecording(outputPathRef.current);
+      const resp = await stopRecording(pathToSave);
       setRecordedPath(resp.outputPath);
       setIsRecording(false);
       setAudioLevel(0);
-      outputPathRef.current = null;
-      // 把录音路径作为 q19 的答案
-      submitAnswer(19, resp.outputPath).catch(() => {});
+      // 把录音路径作为 q19 的答案（静默提交即可）
+      try {
+        await submitAnswer(19, resp.outputPath);
+      } catch (e) {
+        console.error("submit_answer(q19) 失败", e);
+      }
     } catch (e) {
       console.error("停止录音失败", e);
       setIsRecording(false);
+      // 停止失败时把 ref 还原回去，避免下次又无法触发
+      isRecordingRef.current = true;
+      outputPathRef.current = pathToSave;
     }
-  }, [isRecording]);
+  }, []);
 
   const startLocalRecording = useCallback(
     async (outputPath: string, durationMs: number) => {
       outputPathRef.current = outputPath;
+      isRecordingRef.current = false; // 先置 false，startRecording 成功后再置 true
       try {
         await startRecording();
+        // 进入"已开始"状态后再让 setTimeout / record-stop 能触发 stop
+        isRecordingRef.current = true;
         setIsRecording(true);
 
         pollRef.current = window.setInterval(async () => {
@@ -94,6 +113,7 @@ export function useRecorder(): RecorderHookResult {
       } catch (e) {
         console.error("启动录音失败", e);
         setIsRecording(false);
+        outputPathRef.current = null;
       }
     },
     [stopLocalRecording]
@@ -120,7 +140,8 @@ export function useRecorder(): RecorderHookResult {
 
     onRecordStop(() => {
       if (cancelled) return;
-      stopLocalRecording();
+      // 立即调用（stopLocalRecording 现在用 ref 判断 isRecording，不再受闭包 stale 影响）
+      void stopLocalRecording();
     }).then((fn) => {
       if (cancelled) fn();
       else unsub2 = fn;

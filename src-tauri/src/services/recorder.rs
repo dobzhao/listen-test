@@ -22,9 +22,18 @@ use tracing::{error, info};
 
 /// Worker 线程命令
 enum WorkerCommand {
-    Start(Arc<Mutex<Vec<f32>>>),
+    /// 启动录音：samples 是共享 buffer，config 是主线程已经选定的设备配置
+    /// （不能再调一次 default_input_config，否则可能返回不同的 sample rate）
+    Start {
+        samples: Arc<Mutex<Vec<f32>>>,
+        config: cpal::SupportedStreamConfig,
+    },
     Stop {
         output_path: PathBuf,
+        /// 麦克风原始采样率，用于把 samples 重采样到 16kHz 再写 wav
+        sample_rate: u32,
+        /// 声道数（1=mono；>1 时需要先降混到 mono 再写 wav）
+        channels: u16,
         response: std::sync::mpsc::Sender<Result<(), RecorderError>>,
     },
 }
@@ -106,10 +115,10 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<WorkerCommand>) {
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            WorkerCommand::Start(samples) => {
+            WorkerCommand::Start { samples, config } => {
                 // 若已有录音，先丢弃
                 active = None;
-                match start_stream(samples.clone()) {
+                match start_stream(samples.clone(), config) {
                     Ok(stream) => {
                         active = Some(Active {
                             _stream: stream,
@@ -123,12 +132,14 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<WorkerCommand>) {
             }
             WorkerCommand::Stop {
                 output_path,
+                sample_rate,
+                channels,
                 response,
             } => {
                 let result = if let Some(a) = active.take() {
                     drop(a._stream); // 停止流
                     let samples = a.samples.lock().unwrap().clone();
-                    write_wav(&samples, &output_path)
+                    write_wav(&samples, sample_rate, channels, &output_path)
                 } else {
                     Err(RecorderError::NotStarted)
                 };
@@ -139,17 +150,22 @@ fn worker_loop(rx: std::sync::mpsc::Receiver<WorkerCommand>) {
     info!("录音 worker 线程退出");
 }
 
-fn start_stream(samples: Arc<Mutex<Vec<f32>>>) -> Result<cpal::Stream, RecorderError> {
+fn start_stream(
+    samples: Arc<Mutex<Vec<f32>>>,
+    config: cpal::SupportedStreamConfig,
+) -> Result<cpal::Stream, RecorderError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
         .ok_or(RecorderError::NoInputDevice)?;
     let device_name = device.name().unwrap_or_else(|_| "<未知>".to_string());
-    info!(device = %device_name, "使用麦克风设备");
-
-    let config = device
-        .default_input_config()
-        .map_err(|e| RecorderError::UnsupportedConfig(format!("default_input_config: {e}")))?;
+    info!(
+        device = %device_name,
+        sample_rate = config.sample_rate().0,
+        channels = config.channels(),
+        sample_format = ?config.sample_format(),
+        "使用麦克风设备"
+    );
 
     let stream = match config.sample_format() {
         CpalSampleFormat::F32 => {
@@ -203,22 +219,39 @@ fn start_stream(samples: Arc<Mutex<Vec<f32>>>) -> Result<cpal::Stream, RecorderE
     Ok(stream)
 }
 
-fn write_wav(samples: &[f32], output_path: &Path) -> Result<(), RecorderError> {
+fn write_wav(
+    samples: &[f32],
+    from_rate: u32,
+    channels: u16,
+    output_path: &Path,
+) -> Result<(), RecorderError> {
     if samples.is_empty() {
         return Err(RecorderError::UnsupportedConfig("录音数据为空".into()));
     }
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // cpal 把多声道数据交错写入 samples（每帧 channels 个样本）；
+    // 写 wav 前先降混到 mono，否则 stereo 数据塞进 mono WAV 会把时长翻倍
+    let mono = downmix_to_mono(samples, channels);
+
+    // 麦克风原始采样率通常为 44.1k/48k，统一重采样到 16kHz 后写入 wav
+    // （header 与 samples 速率一致，回放和 STT 都能正确处理）
+    const TARGET_RATE: u32 = 16_000;
+    let pcm = if from_rate == TARGET_RATE {
+        mono
+    } else {
+        linear_resample(&mono, from_rate, TARGET_RATE)
+    };
     let spec = WavSpec {
         channels: 1,
-        sample_rate: 16000, // 录音时统一重采样到 16kHz 简化 STT
+        sample_rate: TARGET_RATE,
         bits_per_sample: 16,
         sample_format: HoundSampleFormat::Int,
     };
     let mut writer = WavWriter::create(output_path, spec)
         .map_err(|e| RecorderError::Hound(e.to_string()))?;
-    for &v in samples {
+    for &v in &pcm {
         let s = (v.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         writer
             .write_sample(s)
@@ -227,12 +260,66 @@ fn write_wav(samples: &[f32], output_path: &Path) -> Result<(), RecorderError> {
     writer
         .finalize()
         .map_err(|e| RecorderError::Hound(e.to_string()))?;
+    let secs_in = samples.len() as f64 / (from_rate as f64 * channels.max(1) as f64);
+    let secs_out = pcm.len() as f64 / TARGET_RATE as f64;
     info!(
-        samples = samples.len(),
+        from_rate,
+        to_rate = TARGET_RATE,
+        channels,
+        samples_in = samples.len(),
+        samples_out = pcm.len(),
+        seconds_in = format!("{secs_in:.2}"),
+        seconds_out = format!("{secs_out:.2}"),
         path = ?output_path,
         "录音已保存"
     );
     Ok(())
+}
+
+/// 把 cpal 输出的交错多声道样本降混成 mono：
+/// - channels == 1 → 原样返回
+/// - channels == 2 → (L + R) / 2
+/// - channels > 2 → 取所有声道算术平均
+fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    if ch <= 1 || samples.len() < ch {
+        return samples.to_vec();
+    }
+    let frames = samples.len() / ch;
+    let mut out = Vec::with_capacity(frames);
+    for i in 0..frames {
+        let mut sum = 0.0f32;
+        for c in 0..ch {
+            sum += samples[i * ch + c];
+        }
+        out.push(sum / ch as f32);
+    }
+    out
+}
+
+/// 简单的线性插值重采样（from_rate → to_rate）。
+/// 对语音足够；不做低通滤波，仅供录音场景使用。
+fn linear_resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if samples.len() < 2 || from_rate == 0 || to_rate == 0 {
+        return samples.to_vec();
+    }
+    let ratio = to_rate as f64 / from_rate as f64;
+    let new_len = ((samples.len() as f64) * ratio).round() as usize;
+    let mut out = Vec::with_capacity(new_len.max(1));
+    for i in 0..new_len {
+        let src_pos = i as f64 / ratio;
+        let idx = src_pos as usize;
+        let frac = (src_pos - idx as f64) as f32;
+        let v = if idx + 1 < samples.len() {
+            let s0 = samples[idx];
+            let s1 = samples[idx + 1];
+            s0 + (s1 - s0) * frac
+        } else {
+            samples[idx]
+        };
+        out.push(v);
+    }
+    out
 }
 
 impl RecorderState {
@@ -241,7 +328,8 @@ impl RecorderState {
 
         let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
 
-        // 先确定 sample_rate / channels（用于 stop 时编码 wav）
+        // 选定设备配置（只调一次 default_input_config，并把结果传给 worker，
+        // 避免主线程拿到的 sample_rate 和 worker 实际开流时拿到的 rate 不一致）
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -258,8 +346,11 @@ impl RecorderState {
             .unwrap()
             .clone()
             .ok_or(RecorderError::NoWorker)?;
-        tx.send(WorkerCommand::Start(samples.clone()))
-            .map_err(|_| RecorderError::WorkerStopped)?;
+        tx.send(WorkerCommand::Start {
+            samples: samples.clone(),
+            config,
+        })
+        .map_err(|_| RecorderError::WorkerStopped)?;
 
         *self.samples.lock().unwrap() = Some(samples);
         self.is_recording.store(true, Ordering::Relaxed);
@@ -270,6 +361,15 @@ impl RecorderState {
         // 取一份共享 samples（让 worker 释放它持有的 Arc）
         let _shared = self.samples.lock().unwrap().take();
 
+        // 取出录音时记录的麦克风采样率 + 声道数
+        let sample_rate = self.sample_rate.load(Ordering::Relaxed);
+        let channels = self.channels.load(Ordering::Relaxed);
+        if sample_rate == 0 {
+            return Err(RecorderError::UnsupportedConfig(
+                "采样率未初始化（start_recording 未成功？）".into(),
+            ));
+        }
+
         let (resp_tx, resp_rx) = channel::<Result<(), RecorderError>>();
         let tx = self
             .command_tx
@@ -279,6 +379,8 @@ impl RecorderState {
             .ok_or(RecorderError::NoWorker)?;
         tx.send(WorkerCommand::Stop {
             output_path: output_path.to_path_buf(),
+            sample_rate,
+            channels,
             response: resp_tx,
         })
         .map_err(|_| RecorderError::WorkerStopped)?;
