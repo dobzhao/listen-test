@@ -34,6 +34,7 @@ pub struct StopRecordingArgs {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StopRecordingResponse {
     pub output_path: String,
 }
@@ -53,6 +54,7 @@ pub fn stop_recording(
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioLevelResponse {
     /// 0.0 ~ 1.0
     pub level: f32,
