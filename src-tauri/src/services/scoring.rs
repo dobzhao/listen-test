@@ -17,6 +17,14 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tracing::{info, warn};
 
+/// 安全截断字符串到 N 个字符（不是字节），避免在多字节字符中间切割
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s, // 不足 max_chars 个字符
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ScoringError {
     #[error("LLM 调用失败: {0}")]
@@ -94,7 +102,7 @@ pub async fn score_blanks_15_18(
     let client = build_client().map_err(|e| ScoringError::HttpClient(e.to_string()))?;
     let text = call_llm(&client, llm_cfg, llm_params, prompt).await?;
 
-    info!("15-18 题评分 LLM 返回：{}", &text[..text.len().min(200)]);
+    info!("15-18 题评分 LLM 返回：{}", truncate_chars(&text, 200));
 
     // 解析评分结果
     #[derive(Debug, Deserialize)]
@@ -233,7 +241,7 @@ pub async fn score_retell_19(
         }
     };
 
-    info!("STT 转写结果（前 200 字）：{}", &stt_text[..stt_text.len().min(200)]);
+    info!("STT 转写结果（前 200 字）：{}", truncate_chars(&stt_text, 200));
 
     // 2. LLM 评分
     let mut vars = HashMap::new();
@@ -276,7 +284,7 @@ pub async fn score_retell_19(
         }
     };
 
-    info!("19 题评分 LLM 返回：{}", &text[..text.len().min(200)]);
+    info!("19 题评分 LLM 返回：{}", truncate_chars(&text, 200));
 
     // 解析评分
     #[derive(Debug, Deserialize)]
@@ -298,7 +306,7 @@ pub async fn score_retell_19(
         Err(e) => RetellResult {
             score: 0.0,
             max_score: 10.0,
-            comment: format!("评分解析失败: {e}\n原始返回: {}", &text[..text.len().min(300)]),
+            comment: format!("评分解析失败: {e}\n原始返回: {}", truncate_chars(&text, 300)),
             stt_text,
         },
     }
