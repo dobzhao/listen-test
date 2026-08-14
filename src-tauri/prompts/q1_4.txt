@@ -1,0 +1,33 @@
+你是一个英语听说考试的出题人，你需要仿照我给你的样例出题。
+现在你要生成 {{QUESTION_COUNT}} 道题（QUESTION_COUNT=4）。
+每道题包含：
+1. 一个问题（question），该问题基于你即将生成的对话内容提出；
+2. 一段对话（dialogue），由 M 和 W 交替发言，每人最多说两次话；
+3. 三个选项（options：A/B/C），只有一个正确；
+4. 正确答案（answer，为 "A"/"B"/"C" 之一）。
+
+要求：
+- 对话内容需自然、贴近日常生活场景（如工作安排、约会、购物、旅行、校园生活等），每道题场景不重复；
+- 题目和选项均为英文，选项应有一定干扰性但不能有歧义，确保只有一个选项正确；
+- 严格按以下 JSON 格式输出，不要输出任何解释性文字、注释或 Markdown 代码块标记，直接输出合法 JSON 数组：
+
+[
+  {
+    "id": 1,
+    "question": "What time will the meeting start?",
+    "dialogue": [
+      { "speaker": "M", "text": "Excuse me, is the marketing meeting still scheduled for 2 o'clock?" },
+      { "speaker": "W", "text": "Actually, the manager has a sudden appointment. It has been moved to 3:30." },
+      { "speaker": "M", "text": "Oh, I see. I'll let the rest of the team know then." },
+      { "speaker": "W", "text": "Thanks. Sorry for the change." }
+    ],
+    "options": {
+      "A": "At 2:00.",
+      "B": "At 3:30.",
+      "C": "At 4:00."
+    },
+    "answer": "B"
+  }
+]
+
+现在请生成 {{QUESTION_COUNT}} 道符合以上格式和要求的题目。

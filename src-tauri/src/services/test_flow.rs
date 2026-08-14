@@ -1,0 +1,519 @@
+//! 1-19 题测试流程编排：状态机 + 计时器协同
+//!
+//! 流程：
+//! - 1-4 题（每题独立，4 段短对话）：INTRO(10s, 仅第 1 次) → PREPARE(5s) → PLAYING(1次) → ANSWERING(10s) → 下一题
+//! - 5-12 题（4 段长对话，每段配 2 题）：PREPARE(10s) → PLAYING(2次间隔2s) → ANSWERING(10s) → 下一段
+//! - 13-14 题（独白）：PREPARE(10s) → PLAYING(1次) → ANSWERING(10s) → 下一段
+//! - 15-19 题：PREPARE(30s) → PLAYING(2次间隔3s) → FILL_BLANK(90s) → PLAYING(1次) → RECALL_PREP(120s) → RECORDING(90s)
+//!
+//! 计时统一由 `timer::PhaseTimer` 驱动，前端订阅 tick/phase-finished 事件。
+//! 音频由后端 rodio 直接播放（避免 webview autoplay 限制与 asset protocol 跨平台问题），
+//! 同时通过 `audio-play` 事件通知前端 UI 状态变化（用于显示播放指示）。
+//!
+//! 用户作答由前端通过 `submit_answer` command 提交，存于 FlowStateContainer 中。
+
+use crate::models::question::TestSession;
+use crate::services::audio_player::play_wav_blocking;
+use crate::services::timer::{Phase, PhaseTimer};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
+use tokio::time::{sleep, Duration};
+use tracing::{error, info};
+
+pub const AUDIO_PLAY_EVENT: &str = "test-audio-play";
+pub const FLOW_STATE_EVENT: &str = "test-flow-state";
+pub const FLOW_FINISHED_EVENT: &str = "test-flow-finished";
+pub const RECORD_START_EVENT: &str = "test-record-start";
+pub const RECORD_STOP_EVENT: &str = "test-record-stop";
+
+/// 测试流程中的当前题号（1-14 / 15-18 / 19）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowState {
+    /// 当前阶段第几个题（1-14 / 15-18 / 19）
+    pub question_index: u32,
+    /// 当前阶段（intro / prepare / playing / answering / fill_blank / recall_prep / recording）
+    pub phase: Phase,
+    /// 1-19 题总进度（0.0 ~ 1.0）
+    pub progress: f32,
+    /// 当前要播放的音频路径（仅 playing 阶段；None 表示停止播放）
+    pub audio_path: Option<String>,
+    /// 当前题目是否在材料组内（5-12 / 13-14 为 true）
+    pub is_group: bool,
+    /// 当前题目在组内的索引（0 或 1，仅 is_group=true 时有意义）
+    pub question_in_group: u32,
+}
+
+/// 全部作答结果（1-14）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnswerSet {
+    /// 题目 ID -> 用户答案（"A"/"B"/"C" 或 None 表示未作答）
+    pub answers: HashMap<u32, Option<String>>,
+}
+
+/// 测试流程状态（持久化于内存）
+pub struct FlowStateInner {
+    /// 1-14 题用户作答
+    pub answers: HashMap<u32, Option<String>>,
+    /// 当前 state
+    pub state: Option<FlowState>,
+    /// 是否已完成
+    pub finished: bool,
+    /// 题目 ID -> 正确答案（结算时用）
+    pub correct_answers: HashMap<u32, String>,
+    /// 题目 ID -> 是否属于某个材料组（5-12 / 13-14）
+    pub group_membership: HashMap<u32, u32>, // question_id -> group_start_id
+    /// 音频路径映射
+    pub audio_paths: HashMap<String, String>,
+}
+
+impl Default for FlowStateInner {
+    fn default() -> Self {
+        Self {
+            answers: HashMap::new(),
+            state: None,
+            finished: false,
+            correct_answers: HashMap::new(),
+            group_membership: HashMap::new(),
+            audio_paths: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FlowStateContainer {
+    pub inner: Arc<Mutex<FlowStateInner>>,
+}
+
+impl Default for FlowStateContainer {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(FlowStateInner::default())),
+        }
+    }
+}
+
+/// 初始化 FlowStateContainer：从 TestSession 提取正确选项与音频路径
+pub fn init_container_from_session(container: &FlowStateContainer, session: &TestSession) {
+    let mut guard = container.inner.lock().unwrap();
+    guard.audio_paths = session.audio_paths.clone();
+    guard.correct_answers.clear();
+    guard.group_membership.clear();
+
+    // 1-4
+    for d in &session.short_dialogues {
+        guard
+            .correct_answers
+            .insert(d.question.id, d.question.answer.clone());
+        guard.group_membership.insert(d.question.id, d.question.id);
+    }
+    // 5-12
+    for d in &session.long_dialogues {
+        for (i, q) in d.questions.iter().enumerate() {
+            guard.correct_answers.insert(q.id, q.answer.clone());
+            guard.group_membership.insert(q.id, d.questions[0].id);
+            let _ = i; // 保留变量
+        }
+    }
+    // 13-14
+    for q in &session.monologue.questions {
+        guard.correct_answers.insert(q.id, q.answer.clone());
+        guard.group_membership.insert(q.id, session.monologue.questions[0].id);
+    }
+}
+
+/// 启动 1-14 题完整测试流程（异步任务）
+pub fn spawn_test_flow(
+    app: AppHandle,
+    container: FlowStateContainer,
+    session: TestSession,
+) {
+    init_container_from_session(&container, &session);
+
+    tokio::spawn(async move {
+        let result = run_flow(app.clone(), container.clone(), session).await;
+        match result {
+            Ok(()) => {
+                info!("测试流程完成");
+                let _ = app.emit(
+                    FLOW_FINISHED_EVENT,
+                    &serde_json::json!({ "ok": true, "completed": 19 }),
+                );
+            }
+            Err(e) => {
+                error!(error = %e, "测试流程异常终止");
+                {
+                    let mut guard = container.inner.lock().unwrap();
+                    guard.finished = true;
+                }
+                let _ = app.emit(
+                    FLOW_FINISHED_EVENT,
+                    &serde_json::json!({ "ok": false, "error": e }),
+                );
+            }
+        }
+    });
+}
+
+async fn run_flow(
+    app: AppHandle,
+    container: FlowStateContainer,
+    session: TestSession,
+) -> Result<(), String> {
+    // ===== 1-4 题 =====
+    for (idx, d) in session.short_dialogues.iter().enumerate() {
+        let qnum = idx as u32 + 1;
+        run_short_dialogue(&app, &container, d, qnum).await?;
+    }
+
+    // ===== 5-12 题（4 段长对话，每段配 2 题） =====
+    for (idx, _d) in session.long_dialogues.iter().enumerate() {
+        let qnums = [5 + (idx as u32) * 2, 6 + (idx as u32) * 2];
+        run_group_dialogue(&app, &container, qnums, "d", idx + 1).await?;
+    }
+
+    // ===== 13-14 题（独白） =====
+    run_group_dialogue(&app, &container, [13, 14], "m", 1).await?;
+
+    // ===== 15-19 题（听后转述） =====
+    run_retell(&app, &container, &session.retell).await?;
+
+    {
+        let mut guard = container.inner.lock().unwrap();
+        guard.finished = true;
+        guard.state = None;
+    }
+    Ok(())
+}
+
+/// 1-4 题：单题独立流程
+async fn run_short_dialogue(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    d: &crate::models::question::ShortDialogue,
+    qnum: u32,
+) -> Result<(), String> {
+    let qid = d.question.id;
+    let audio_path = {
+        let guard = container.inner.lock().unwrap();
+        guard.audio_paths.get(&format!("q{qnum}")).cloned()
+    };
+
+    // 第一次进 1-4 题时显示 10 秒介绍
+    if qnum == 1 {
+        emit_state(app, container, FlowState {
+            question_index: qnum,
+            phase: Phase::Intro,
+            progress: 0.0,
+            audio_path: None,
+            is_group: false,
+            question_in_group: 0,
+        });
+        let _timer = PhaseTimer::start(app.clone(), Phase::Intro, 10_000, 100);
+        sleep(Duration::from_millis(10_500)).await;
+    }
+
+    // PREPARE (5s)
+    emit_state(app, container, FlowState {
+        question_index: qnum,
+        phase: Phase::Prepare,
+        progress: 0.0,
+        audio_path: None,
+        is_group: false,
+        question_in_group: 0,
+    });
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 5_000, 100);
+    sleep(Duration::from_millis(5_500)).await;
+
+    // PLAYING (1x, 后端 rodio 播放)
+    emit_state(app, container, FlowState {
+        question_index: qnum,
+        phase: Phase::Playing,
+        progress: 0.0,
+        audio_path: audio_path.clone(),
+        is_group: false,
+        question_in_group: 0,
+    });
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
+    sleep(Duration::from_millis(2_500)).await;
+
+    // ANSWERING (10s)
+    emit_state(app, container, FlowState {
+        question_index: qnum,
+        phase: Phase::Answering,
+        progress: 0.0,
+        audio_path: None,
+        is_group: false,
+        question_in_group: 0,
+    });
+    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
+    sleep(Duration::from_millis(10_500)).await;
+
+    info!(question_id = qid, "第 {} 题流程完成", qnum);
+    Ok(())
+}
+
+/// 5-12 / 13-14：组题共用 ANSWERING 阶段
+async fn run_group_dialogue(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    qnums: [u32; 2],
+    audio_prefix: &str,
+    audio_idx: usize,
+) -> Result<(), String> {
+    let first = qnums[0];
+    let audio_key = format!("{audio_prefix}{audio_idx}");
+    let audio_path = {
+        let guard = container.inner.lock().unwrap();
+        guard.audio_paths.get(&audio_key).cloned()
+    };
+
+    // PREPARE (10s)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: first,
+            phase: Phase::Prepare,
+            progress: 0.0,
+            audio_path: None,
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 10_000, 100);
+    sleep(Duration::from_millis(10_500)).await;
+
+    // PLAYING #1 (后端 rodio 播放)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: first,
+            phase: Phase::Playing,
+            progress: 0.0,
+            audio_path: audio_path.clone(),
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
+    sleep(Duration::from_millis(2_500)).await;
+
+    // 2 秒静音间隔
+    let _ = app.emit(
+        AUDIO_PLAY_EVENT,
+        &serde_json::json!({ "path": null, "loop": false }),
+    );
+    sleep(Duration::from_millis(2_500)).await;
+
+    // PLAYING #2
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
+    sleep(Duration::from_millis(2_500)).await;
+
+    // ANSWERING (10s)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: first,
+            phase: Phase::Answering,
+            progress: 0.0,
+            audio_path: None,
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::Answering, 10_000, 100);
+    sleep(Duration::from_millis(10_500)).await;
+
+    info!(qnums = ?qnums, "组题流程完成");
+    Ok(())
+}
+
+fn emit_state(app: &AppHandle, container: &FlowStateContainer, state: FlowState) {
+    {
+        let mut guard = container.inner.lock().unwrap();
+        guard.state = Some(state.clone());
+    }
+    if let Err(e) = app.emit(FLOW_STATE_EVENT, &state) {
+        error!(error = %e, "发送 flow state 失败");
+    }
+}
+
+/// 后端播放音频：使用 rodio 同步播放（阻塞当前 tokio task 直到播放完成）
+///
+/// 同时通过 audio-play 事件通知前端 UI 更新（仅用于显示指示器）。
+async fn play_audio(app: &AppHandle, path: Option<String>) {
+    let Some(p) = path else {
+        return;
+    };
+    // 通知前端"开始播放"（用于 UI 指示器）
+    let _ = app.emit(
+        AUDIO_PLAY_EVENT,
+        &serde_json::json!({ "path": p, "loop": false }),
+    );
+
+    let pb = PathBuf::from(&p);
+    if !pb.exists() {
+        error!(path = %p, "音频文件不存在，跳过播放");
+        return;
+    }
+
+    // 用 spawn_blocking 跑同步的 rodio 播放
+    let result = tokio::task::spawn_blocking(move || play_wav_blocking(&pb)).await;
+    match result {
+        Ok(Ok(())) => info!(path = %p, "音频播放完成"),
+        Ok(Err(e)) => error!(error = %e, path = %p, "音频播放失败"),
+        Err(e) => error!(error = %e, path = %p, "spawn_blocking 失败"),
+    }
+}
+
+/// 15-19 题：听后转述完整流程
+///
+/// 阶段：
+/// 1. PREPARE (30s)：展示挖空表格，提示"准备聆听"
+/// 2. PLAYING #1 → 3s 静音 → PLAYING #2（共 2 次播放）
+/// 3. FILL_BLANK (90s)：用户填写 15-18 题空格
+/// 4. PLAYING #3（第 3 次播放），挖空表格保持可见
+/// 5. RECALL_PREP (120s)：默读准备（不可听音频）
+/// 6. RECORDING (90s)：自动开始录音
+async fn run_retell(
+    app: &AppHandle,
+    container: &FlowStateContainer,
+    _retell: &crate::models::question::RetellMaterial,
+) -> Result<(), String> {
+    let audio_path = {
+        let guard = container.inner.lock().unwrap();
+        guard.audio_paths.get("retell").cloned()
+    };
+
+    let base_progress = 14.0 / 19.0; // 14 题已完成
+
+    // 1. PREPARE (30s)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 15,
+            phase: Phase::Prepare,
+            progress: base_progress,
+            audio_path: None,
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, 30_000, 100);
+    sleep(Duration::from_millis(30_500)).await;
+
+    // 2. PLAYING #1 (后端 rodio 播放)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 15,
+            phase: Phase::Playing,
+            progress: base_progress + 0.05,
+            audio_path: audio_path.clone(),
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
+    sleep(Duration::from_millis(2_500)).await;
+
+    // 3 秒静音间隔
+    let _ = app.emit(
+        AUDIO_PLAY_EVENT,
+        &serde_json::json!({ "path": null, "loop": false }),
+    );
+    sleep(Duration::from_millis(3_500)).await;
+
+    // PLAYING #2
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100);
+    sleep(Duration::from_millis(2_500)).await;
+
+    // 3. FILL_BLANK (90s)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 15,
+            phase: Phase::FillBlank,
+            progress: base_progress + 0.2,
+            audio_path: None,
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, 90_000, 100);
+    sleep(Duration::from_millis(90_500)).await;
+
+    // 4. PLAYING #3 (后端 rodio 播放)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 15,
+            phase: Phase::Playing,
+            progress: base_progress + 0.5,
+            audio_path: audio_path.clone(),
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
+    play_audio(app, audio_path.clone()).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100);
+    sleep(Duration::from_millis(2_500)).await;
+
+    // 5. RECALL_PREP (120s)
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 19,
+            phase: Phase::RecallPrep,
+            progress: base_progress + 0.7,
+            audio_path: None,
+            is_group: false,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::RecallPrep, 120_000, 100);
+    sleep(Duration::from_millis(120_500)).await;
+
+    // 6. RECORDING (90s)
+    // 通知前端"开始录音"
+    let _ = app.emit(RECORD_START_EVENT, &serde_json::json!({
+        "durationMs": 90_000
+    }));
+
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 19,
+            phase: Phase::Recording,
+            progress: base_progress + 0.85,
+            audio_path: None,
+            is_group: false,
+            question_in_group: 0,
+        },
+    );
+    let _timer = PhaseTimer::start(app.clone(), Phase::Recording, 90_000, 100);
+    sleep(Duration::from_millis(90_500)).await;
+
+    // 通知前端"停止录音"
+    let _ = app.emit(RECORD_STOP_EVENT, &serde_json::json!({}));
+
+    info!("15-19 题流程完成");
+    Ok(())
+}
