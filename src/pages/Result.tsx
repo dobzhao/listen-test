@@ -20,7 +20,6 @@ import {
   RefreshCw,
   Home,
   AlertCircle,
-  FileText,
 } from "lucide-react";
 import { useResultStore } from "@/store/result";
 import { useTestStore } from "@/store/test";
@@ -181,21 +180,6 @@ export default function ResultPage() {
 
         {/* 19 题转述 */}
         <RetellSection retell={result.retell_result} passage={result.dialogue_texts.retell} />
-
-        {/* 听力原文（15-19 共用） */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              15-19 题听力原文
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm whitespace-pre-wrap leading-relaxed">
-              {result.dialogue_texts.retell ?? "（无）"}
-            </p>
-          </CardContent>
-        </Card>
       </main>
     </div>
   );
