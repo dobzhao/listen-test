@@ -165,8 +165,15 @@ pub fn spawn_test_flow(
     session: TestSession,
     timing: TimingConfig,
 ) {
+    info!(
+        "spawn_test_flow: 初始化 FlowStateContainer session_id={}",
+        session.session_id
+    );
     init_container_from_session(&container, &session);
     let timing = Arc::new(timing);
+    // 重置 skip_requested / recording_completed 标志，
+    // 避免上一轮残留下一次进入流程时被识别成跳过/录音完成
+    container.reset_recording_completed();
 
     tokio::spawn(async move {
         let result = run_flow(app.clone(), container.clone(), session, timing).await;
@@ -200,6 +207,10 @@ async fn run_flow(
     timing: Arc<TimingConfig>,
 ) -> Result<(), String> {
     // ===== 1-4 题 =====
+    info!(
+        "run_flow: 开始 1-4 题短对话，共 {} 段",
+        session.short_dialogues.len()
+    );
     for (idx, d) in session.short_dialogues.iter().enumerate() {
         let qnum = idx as u32 + 1;
         run_short_dialogue(&app, &container, d, qnum, timing.clone()).await?;

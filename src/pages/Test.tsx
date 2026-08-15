@@ -26,7 +26,11 @@ import {
 } from "@/components/test/QuestionDisplay";
 import { FillBlankTable } from "@/components/test/FillBlankTable";
 import { RecorderPanel } from "@/components/test/RecorderPanel";
-import { skipToNext, startTestFlow } from "@/lib/tauri";
+import {
+  skipToNext,
+  startTestFlow,
+  getFlowState,
+} from "@/lib/tauri";
 
 /** 判断当前段对应题目的作答是否完整（用于"下一题"按钮的 enabled 计算） */
 function computeSegmentComplete(
@@ -88,6 +92,8 @@ export default function TestPage() {
   // 15-19 题当前播放轮次：1=PLAYING#1, 2=PLAYING#2, 3=PLAYING#3（其余 null）。
   // PLAYING #3 阶段挖空应禁用（Spec §3.4）。
   const playCount = useTestFlowStore((s) => s.playCount);
+  const applyFlowState = useTestFlowStore((s) => s.applyFlowState);
+  const applyFinished = useTestFlowStore((s) => s.applyFinished);
 
   // 订阅所有后端事件
   useTestFlowEvents();
@@ -136,6 +142,35 @@ export default function TestPage() {
       return () => clearTimeout(t);
     }
   }, [finished, error, navigate]);
+
+  // 挂载时主动拉一次后端状态，避免以下竞态：
+  // - "重新测试"流程中，ResultPage 先 navigate("/test")，再后端 reset_test_flow + start_test_flow。
+  //   此时后端会在 TestPage 还未挂载订阅时 emit `test-flow-state`，事件被丢弃。
+  // - 拉一次 get_flow_state 能拿到后端当前的 phase/questionIndex 并补齐 store，
+  //   后续事件订阅再覆盖也不会出错。
+  // 仅在尚未开始（phase=null / questionIndex=0）时拉取，避免重复 work。
+  useEffect(() => {
+    let cancelled = false;
+    const phaseNow = useTestFlowStore.getState().phase;
+    const idxNow = useTestFlowStore.getState().questionIndex;
+    if (phaseNow !== null && idxNow > 0) return;
+    getFlowState()
+      .then(({ state, finished: backendFinished }) => {
+        if (cancelled) return;
+        if (state) {
+          applyFlowState(state);
+        }
+        if (backendFinished) {
+          applyFinished({ ok: true });
+        }
+      })
+      .catch((e) => {
+        console.error("[Test] get_flow_state 失败", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyFlowState, applyFinished]);
 
   if (!session) {
     return (

@@ -33,14 +33,23 @@ export const useResultStore = create<ResultState>((set) => ({
 
   load: async () => {
     // 并发互斥：如果已经在跑，直接返回同一 Promise
-    if (loadInFlight) return loadInFlight;
+    if (loadInFlight) {
+      console.log("[result] load: 已有在飞评分请求，复用同一 Promise");
+      return loadInFlight;
+    }
+    console.log("[result] load: 发起 score_full_test 后端命令");
     set({ loading: true, error: null });
     loadInFlight = (async () => {
       try {
         const r = await scoreFullTest();
         set({ result: r, loading: false });
+        console.log(
+          `[result] load: 评分完成 总分=${r.total_score}/${r.max_score}`
+        );
       } catch (e) {
-        set({ error: String(e), loading: false });
+        const msg = String(e);
+        console.error("[result] load: 评分失败", msg);
+        set({ error: msg, loading: false });
       } finally {
         loadInFlight = null;
       }
@@ -50,6 +59,10 @@ export const useResultStore = create<ResultState>((set) => ({
 
   reset: () => {
     // 重置时丢弃在飞请求的引用，避免重置后残留状态导致下次 load 被错误复用
+    const prev = useResultStore.getState().result;
+    console.log(
+      `[result] reset: 清空 result 前总分=${prev?.total_score ?? "<none>"}`
+    );
     loadInFlight = null;
     set({ result: null, loading: false, error: null });
   },

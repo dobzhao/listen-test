@@ -12,6 +12,7 @@ use crate::commands::test_session::SessionState;
 use crate::services::test_flow::{spawn_test_flow, FlowState, FlowStateContainer};
 use std::sync::atomic::Ordering;
 use tauri::State;
+use tracing::{debug, info, warn};
 
 /// 全局测试流程状态（独立于 SessionState，方便 reset）
 pub struct FlowGlobal {
@@ -51,6 +52,33 @@ pub async fn start_test_flow(
         guard.clone().ok_or_else(|| "尚未生成测试会话，请先预生成".to_string())?
     };
 
+    // 防止重复启动：flow 已经处于 running 状态时直接拒绝。
+    // 背景：ResultPage "重新测试" 流程会先 reset_test_flow 再 start_test_flow。
+    // 如果前端在尚未收到事件时再次点 "开始测试"，第二次调用会再 spawn 一份 run_flow，
+    // 导致两条并发 run_flow 互相覆盖 state / 答案。
+    {
+        let guard = flow
+            .container
+            .inner
+            .lock()
+            .map_err(|e| format!("锁读取失败: {e}"))?;
+        if guard.state.is_some() && !guard.finished {
+            warn!(
+                "start_test_flow: 流程已在运行中，session_id={}，拒绝重复启动",
+                session.session_id
+            );
+            return Err("测试流程已在运行中".to_string());
+        }
+    }
+
+    info!(
+        "start_test_flow: 启动测试流程 session_id={}, 短对话={}, 长对话={}, 独白题数={}",
+        session.session_id,
+        session.short_dialogues.len(),
+        session.long_dialogues.len(),
+        session.monologue.questions.len(),
+    );
+
     // 读取流程时长配置（用快照，不用读锁常驻）
     let timing = {
         let guard = config_state
@@ -60,7 +88,13 @@ pub async fn start_test_flow(
         guard.timing.clone()
     };
 
+    debug!(
+        "start_test_flow: timing={:?}",
+        timing
+    );
+
     spawn_test_flow(app, flow.container.clone(), session, timing);
+    info!("start_test_flow: 已 spawn 测试流程异步任务");
     Ok(StartFlowResponse { ok: true })
 }
 
@@ -83,7 +117,23 @@ pub fn submit_answer(
         .inner
         .lock()
         .map_err(|e| format!("锁写入失败: {e}"))?;
-    guard.answers.insert(args.question_id, args.answer);
+    let qid = args.question_id;
+    let answer_preview = args
+        .answer
+        .as_ref()
+        .map(|s| {
+            if s.len() > 40 {
+                format!("{}…(len={})", &s[..40], s.len())
+            } else {
+                s.clone()
+            }
+        })
+        .unwrap_or_else(|| "<None>".to_string());
+    guard.answers.insert(qid, args.answer);
+    info!(
+        "submit_answer: qid={}, answer={}",
+        qid, answer_preview
+    );
     Ok(())
 }
 
@@ -143,12 +193,17 @@ pub fn reset_test_flow(
         .inner
         .lock()
         .map_err(|e| format!("锁写入失败: {e}"))?;
+    let cleared_answers = guard.answers.len();
     guard.answers.clear();
     guard.state = None;
     guard.finished = false;
     guard.skip_requested.store(false, Ordering::Relaxed);
     guard.recording_completed.store(false, Ordering::Relaxed);
     // correct_answers / audio_paths 由 init_container_from_session 重新填充
+    info!(
+        "reset_test_flow: 已清空 {} 个答案记录，状态已重置（包含 finished / skip / recording 标志）",
+        cleared_answers
+    );
     Ok(())
 }
 

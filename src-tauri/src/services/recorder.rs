@@ -18,7 +18,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Worker 线程命令
 enum WorkerCommand {
@@ -249,6 +249,11 @@ fn write_wav(
         bits_per_sample: 16,
         sample_format: HoundSampleFormat::Int,
     };
+    let was_exists = output_path.exists();
+    debug!(
+        "write_wav: 即将写入录音 path={:?}, was_exists={}（将覆盖）",
+        output_path, was_exists
+    );
     let mut writer = WavWriter::create(output_path, spec)
         .map_err(|e| RecorderError::Hound(e.to_string()))?;
     for &v in &pcm {
@@ -271,6 +276,7 @@ fn write_wav(
         seconds_in = format!("{secs_in:.2}"),
         seconds_out = format!("{secs_out:.2}"),
         path = ?output_path,
+        was_exists,
         "录音已保存"
     );
     Ok(())
@@ -340,6 +346,12 @@ impl RecorderState {
         self.sample_rate.store(config.sample_rate().0, Ordering::Relaxed);
         self.channels.store(config.channels(), Ordering::Relaxed);
 
+        info!(
+            "RecorderState::start_recording: 采样率={}, 声道数={}",
+            config.sample_rate().0,
+            config.channels()
+        );
+
         let tx = self
             .command_tx
             .lock()
@@ -354,6 +366,7 @@ impl RecorderState {
 
         *self.samples.lock().unwrap() = Some(samples);
         self.is_recording.store(true, Ordering::Relaxed);
+        info!("RecorderState::start_recording: 已发送 Start 命令到 worker");
         Ok(())
     }
 

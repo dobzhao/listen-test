@@ -7,6 +7,7 @@ use crate::commands::test_flow::FlowGlobal;
 use crate::commands::test_session::SessionState;
 use crate::models::result::TestResult;
 use crate::services::scoring::score_full_test as run_scoring;
+use tracing::info;
 
 #[tauri::command]
 pub async fn score_full_test(
@@ -32,6 +33,11 @@ pub async fn score_full_test(
         guard.clone().ok_or_else(|| "尚未生成测试会话".to_string())?
     };
 
+    info!(
+        "score_full_test: 开始评分 session_id={}",
+        session.session_id
+    );
+
     // 3. 取用户作答与正确答案
     let (user_answers, correct_answers, recording_path) = {
         let guard = flow
@@ -42,6 +48,12 @@ pub async fn score_full_test(
         let rec = guard.answers.get(&19).cloned().flatten();
         (guard.answers.clone(), guard.correct_answers.clone(), rec)
     };
+
+    info!(
+        "score_full_test: user_answers={} 条, 19题录音路径={:?}",
+        user_answers.len(),
+        recording_path
+    );
 
     // 4. 计算 1-14 题 ID 列表（按升序）
     let mut mcq_ids: Vec<u32> = correct_answers
@@ -62,6 +74,11 @@ pub async fn score_full_test(
     )
     .await
     .map_err(|e| format!("评分失败: {e}"))?;
+
+    info!(
+        "score_full_test: 评分完成 总分={}/{}",
+        result.total_score, result.max_score
+    );
 
     Ok(result)
 }

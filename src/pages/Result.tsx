@@ -23,6 +23,12 @@ import {
 } from "lucide-react";
 import { useResultStore } from "@/store/result";
 import { useTestStore } from "@/store/test";
+import { useTestFlowStore } from "@/store/testFlow";
+import {
+  resetTestFlow,
+  clearTestSession,
+  startTestFlow,
+} from "@/lib/tauri";
 import type { McqResult, BlankResult, RetellResult } from "@/types/result";
 
 export default function ResultPage() {
@@ -35,31 +41,95 @@ export default function ResultPage() {
 
   const resetSession = useTestStore((s) => s.reset);
 
+  // 重新测试：保留当前测试会话与题目，只清空 1-19 题作答记录与本页评分结果，
+  // 然后跳回 /test 触发新一轮状态机；录音文件在 RECORDING 阶段会被同名覆盖。
+  //
+  // 重要：必须先 navigate 再 reset。
+  // ResultPage 的 useEffect 监听 result/loading/error 变化触发 load() 评分。
+  // 如果 resetResult() 在 navigate("/test") 之前调用，ResultPage 仍处于挂载状态，
+  // 其 useEffect 会立即调用 load()，对着空答案算一次 0 分，
+  // 后续该 useEffect 见到 result 已非 null 不再触发，最终结算页显示的是这次空答案的 0 分。
+  // 先导航让 ResultPage 卸载，再 reset 状态，useEffect 就不会在旧页面上重跑。
+  const handleRetest = async () => {
+    if (
+      !window.confirm(
+        "确认清空之前的答题记录并重新作答？\n将清空 1-14 题选项、15-18 题填空与第 19 题录音，但保留题目。"
+      )
+    ) {
+      console.log("[Result] handleRetest: 用户取消");
+      return;
+    }
+    const sessionId = result?.session_id ?? "<unknown>";
+    const clearedAnswers = Object.keys(useTestFlowStore.getState().answers).length;
+    console.log(
+      `[Result] handleRetest: 用户确认重新测试 session_id=${sessionId}, 清空 ${clearedAnswers} 条前端作答`
+    );
+    // 1. 先导航，让 ResultPage 卸载（避免 useEffect 重跑评分）
+    navigate("/test");
+    // 2. 后端：清空流程状态（answers、finished、skip / recording 标志等）
+    try {
+      await resetTestFlow();
+      console.log("[Result] handleRetest: 后端 reset_test_flow 成功");
+    } catch (e) {
+      console.error("[Result] handleRetest: reset_test_flow 失败", e);
+    }
+    // 3. 前端：清空运行时状态
+    resetResult();
+    useTestFlowStore.getState().reset();
+    console.log("[Result] handleRetest: 前端 store 已重置");
+    // 4. 自动启动 1-19 题流程（同一 session，题目不变）
+    // 避免用户再次点击 "开始测试"；TestPage 挂载后通过事件订阅推进状态。
+    try {
+      await startTestFlow();
+      console.log("[Result] handleRetest: start_test_flow 成功");
+    } catch (e) {
+      console.error("[Result] handleRetest: start_test_flow 失败", e);
+    }
+  };
+
+  // 返回主菜单：像重新打开程序一样清空所有内存状态（不清理磁盘缓存），
+  // 让用户回到主菜单后由 MainMenu.loadSession() 决定是否从缓存恢复。
+  //
+  // 同样先 navigate 再 reset，避免重置 result 触发 useEffect 重新评分。
+  const handleBackToMenu = async () => {
+    if (
+      !window.confirm(
+        "确认返回主菜单？\n将清空当前题目与所有作答（相当于重新打开程序）。"
+      )
+    ) {
+      console.log("[Result] handleBackToMenu: 用户取消");
+      return;
+    }
+    const sessionId = result?.session_id ?? "<unknown>";
+    console.log(`[Result] handleBackToMenu: 用户确认返回 session_id=${sessionId}`);
+    // 1. 先导航，让 ResultPage 卸载
+    navigate("/");
+    // 2. 后端：并行清空流程状态与会话
+    try {
+      await resetTestFlow();
+      console.log("[Result] handleBackToMenu: reset_test_flow 成功");
+    } catch (e) {
+      console.error("[Result] handleBackToMenu: reset_test_flow 失败", e);
+    }
+    try {
+      await clearTestSession();
+      console.log("[Result] handleBackToMenu: clear_test_session 成功");
+    } catch (e) {
+      console.error("[Result] handleBackToMenu: clear_test_session 失败", e);
+    }
+    // 3. 前端：清空三个 store
+    resetResult();
+    useTestFlowStore.getState().reset();
+    resetSession();
+    console.log("[Result] handleBackToMenu: 前端 store 已重置");
+  };
+
   // 进入页面时自动加载评分
   useEffect(() => {
     if (!result && !loading && !error) {
       load();
     }
   }, [result, loading, error, load]);
-
-  const handleBackToMenu = () => {
-    if (
-      window.confirm(
-        "确认返回主菜单？\n将清空当前测试结果。"
-      )
-    ) {
-      resetResult();
-      resetSession();
-      navigate("/");
-    }
-  };
-
-  const handleRetest = async () => {
-    resetResult();
-    resetSession();
-    navigate("/");
-    // 用户需要重新点"开始测试"生成新的题目
-  };
 
   if (loading && !result) {
     return (

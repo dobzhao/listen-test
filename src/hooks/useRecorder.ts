@@ -63,26 +63,35 @@ export function useRecorder(): RecorderHookResult {
     }
     // 用 ref 判断而不是 state 闭包，避免 stale closure 导致自动停止时静默 no-op
     if (!isRecordingRef.current || !outputPathRef.current) {
+      console.log("[useRecorder] stopLocalRecording: 跳过（未在录音或无输出路径）");
       return;
     }
     const pathToSave = outputPathRef.current;
+    console.log(`[useRecorder] stopLocalRecording: 准备写入 ${pathToSave}`);
     // 先清空 ref，避免并发触发时重复 stop
     isRecordingRef.current = false;
     outputPathRef.current = null;
     try {
       const resp = await stopRecording(pathToSave);
+      console.log(
+        `[useRecorder] stopLocalRecording: 录音已保存 outputPath=${resp.outputPath}`
+      );
       setRecordedPath(resp.outputPath);
       setIsRecording(false);
       setAudioLevel(0);
       // 把录音路径作为 q19 的答案（静默提交即可）
       try {
         await submitAnswer(19, resp.outputPath);
+        console.log(
+          `[useRecorder] submit_answer(19, ${resp.outputPath}) 成功`
+        );
       } catch (e) {
         console.error("submit_answer(q19) 失败", e);
       }
       // 通知后端：录音已结束，跳过剩余的 90 秒等待，立即进入评分阶段
       try {
         await notifyRecordingCompleted();
+        console.log("[useRecorder] notify_recording_completed 成功");
       } catch (e) {
         console.error("notify_recording_completed 失败", e);
       }
@@ -97,6 +106,9 @@ export function useRecorder(): RecorderHookResult {
 
   const startLocalRecording = useCallback(
     async (outputPath: string, durationMs: number) => {
+      console.log(
+        `[useRecorder] startLocalRecording: outputPath=${outputPath}, durationMs=${durationMs}`
+      );
       outputPathRef.current = outputPath;
       isRecordingRef.current = false; // 先置 false，startRecording 成功后再置 true
       try {
@@ -115,6 +127,9 @@ export function useRecorder(): RecorderHookResult {
         }, 100);
 
         timerRef.current = window.setTimeout(() => {
+          console.log(
+            `[useRecorder] ${durationMs}ms 计时到，自动停止录音`
+          );
           stopLocalRecording();
         }, durationMs);
       } catch (e) {

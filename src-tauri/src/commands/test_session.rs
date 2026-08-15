@@ -5,6 +5,7 @@ use crate::models::question::TestSession;
 use crate::services::test_session::generate_full_session;
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
+use tracing::info;
 
 /// 全局测试会话状态
 pub struct SessionState {
@@ -49,6 +50,11 @@ pub async fn generate_test_session(
         *guard = Some(session.clone());
     }
 
+    info!(
+        "generate_test_session: 内存中已保存测试会话 session_id={}",
+        session.session_id
+    );
+
     Ok(session)
 }
 
@@ -73,6 +79,11 @@ pub fn clear_test_session(
         .inner
         .lock()
         .map_err(|e| format!("锁写入失败: {e}"))?;
+    let cleared_session_id = guard.as_ref().map(|s| s.session_id.clone());
     *guard = None;
+    info!(
+        "clear_test_session: 已清空内存中的测试会话（被清空的 session_id={:?}，磁盘缓存未删除）",
+        cleared_session_id
+    );
     Ok(())
 }

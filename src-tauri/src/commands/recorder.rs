@@ -6,6 +6,7 @@
 
 use crate::services::recorder::RecorderState;
 use std::sync::Arc;
+use tracing::{debug, info};
 
 pub struct RecorderGlobal {
     pub state: Arc<RecorderState>,
@@ -21,10 +22,13 @@ impl Default for RecorderGlobal {
 
 #[tauri::command]
 pub fn start_recording(recorder: tauri::State<'_, RecorderGlobal>) -> Result<(), String> {
+    info!("start_recording: 收到启动录音命令");
     recorder
         .state
         .start_recording()
-        .map_err(|e| format!("启动录音失败: {e}"))
+        .map_err(|e| format!("启动录音失败: {e}"))?;
+    info!("start_recording: 已启动 cpal 录音");
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -44,10 +48,23 @@ pub fn stop_recording(
     recorder: tauri::State<'_, RecorderGlobal>,
     args: StopRecordingArgs,
 ) -> Result<StopRecordingResponse, String> {
+    info!(
+        "stop_recording: 收到停止录音命令，output_path={}",
+        args.output_path
+    );
+    let exists_before = std::path::Path::new(&args.output_path).exists();
+    debug!(
+        "stop_recording: 目标文件 output_path={} 存在={}（将覆盖）",
+        args.output_path, exists_before
+    );
     recorder
         .state
         .stop_recording(std::path::Path::new(&args.output_path))
         .map_err(|e| format!("停止录音失败: {e}"))?;
+    info!(
+        "stop_recording: 录音已写入 output_path={}（was_exists_before={}）",
+        args.output_path, exists_before
+    );
     Ok(StopRecordingResponse {
         output_path: args.output_path,
     })

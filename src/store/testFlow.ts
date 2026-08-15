@@ -90,7 +90,12 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       answers: { ...s.answers, [questionId]: answer },
     })),
 
-  reset: () =>
+  reset: () => {
+    const prev = useTestFlowStore.getState();
+    const prevAnswers = Object.keys(prev.answers).length;
+    console.log(
+      `[testFlow] reset: 清空 ${prevAnswers} 条前端作答，重置 questionIndex/phase/finished 等`
+    );
     set({
       questionIndex: 0,
       phase: null,
@@ -104,7 +109,8 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       answers: {},
       finished: false,
       error: null,
-    }),
+    });
+  },
 }));
 
 export const PHASE_LABELS: Record<TestPhase, string> = {

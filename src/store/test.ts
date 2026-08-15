@@ -31,11 +31,16 @@ export const useTestStore = create<TestState>((set, get) => ({
   error: null,
 
   start: async () => {
+    console.log("[test] start: 开始生成测试会话（LLM + TTS）");
     set({ stage: "generating", error: null, progress: null });
     try {
       const session = await generateTestSession();
+      console.log(
+        `[test] start: 预生成完成 session_id=${session.session_id}`
+      );
       set({ session, stage: "ready" });
     } catch (e) {
+      console.error("[test] start: 预生成失败", e);
       set({ stage: "error", error: String(e) });
       throw e;
     }
@@ -43,6 +48,9 @@ export const useTestStore = create<TestState>((set, get) => ({
 
   load: async () => {
     const session = await getTestSession();
+    console.log(
+      `[test] load: 从后端恢复 session=${session?.session_id ?? "<none>"}`
+    );
     set({
       session,
       stage: session ? "ready" : "idle",
@@ -50,8 +58,13 @@ export const useTestStore = create<TestState>((set, get) => ({
   },
 
   reset: async () => {
+    const prev = get().session;
+    console.log(
+      `[test] reset: 即将清空测试会话 session_id=${prev?.session_id ?? "<none>"}`
+    );
     await clearTestSession();
     set({ session: null, stage: "idle", progress: null, error: null });
+    console.log("[test] reset: 前端 store 已重置（session 清空到 null）");
   },
 
   setProgress: (p) => set({ progress: p }),
