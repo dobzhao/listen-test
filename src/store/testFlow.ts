@@ -28,6 +28,10 @@ interface TestFlowState {
   isGroup: boolean;
   // 组内索引（0/1）
   questionInGroup: number;
+  // 15-19 题当前是第几次播放（null = 非 playing 或 1-14 题；
+  // 仅 15-19 题的 PLAYING #1/#2/#3 阶段分别取值 1/2/3）。
+  // 由 applyFlowState 写入，applyTick 不触碰（保持阶段内值稳定）。
+  playCount: number | null;
   // 用户作答
   answers: AnswerMap;
   // 是否已完成
@@ -52,6 +56,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
   audioPath: null,
   isGroup: false,
   questionInGroup: 0,
+  playCount: null,
   answers: {},
   finished: false,
   error: null,
@@ -71,6 +76,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       audioPath: p.audioPath,
       isGroup: p.isGroup,
       questionInGroup: p.questionInGroup,
+      playCount: p.playCount ?? null,
     }),
 
   applyFinished: (p) =>
@@ -94,6 +100,7 @@ export const useTestFlowStore = create<TestFlowState>((set) => ({
       audioPath: null,
       isGroup: false,
       questionInGroup: 0,
+      playCount: null,
       answers: {},
       finished: false,
       error: null,

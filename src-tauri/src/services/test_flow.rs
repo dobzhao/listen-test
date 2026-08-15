@@ -48,6 +48,10 @@ pub struct FlowState {
     pub is_group: bool,
     /// 当前题目在组内的索引（0 或 1，仅 is_group=true 时有意义）
     pub question_in_group: u32,
+    /// 15-19 题当前是第几次播放（None = 非 playing 或 1-14 题；
+    /// 仅 15-19 题的 PLAYING #1/#2/#3 阶段分别填 Some(1/2/3)）。
+    /// 前端据此在 PLAYING #3 阶段禁用填空编辑（Spec §3.4）。
+    pub play_count: Option<u32>,
 }
 
 /// 全部作答结果（1-14）
@@ -249,6 +253,7 @@ async fn run_short_dialogue(
             audio_path: None,
             is_group: false,
             question_in_group: 0,
+            play_count: None,
         });
         let _timer = PhaseTimer::start(app.clone(), Phase::Intro, intro_ms as u64, 100);
         interruptible_sleep(Duration::from_millis(intro_ms as u64 + 500), &skip_flag).await;
@@ -266,6 +271,7 @@ async fn run_short_dialogue(
         audio_path: None,
         is_group: false,
         question_in_group: 0,
+            play_count: None,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
     interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
@@ -281,6 +287,7 @@ async fn run_short_dialogue(
         audio_path: audio_path.clone(),
         is_group: false,
         question_in_group: 0,
+            play_count: None,
     });
     // 用真实音频时长驱动进度条；若读不到则 fallback 2 秒。
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -302,6 +309,7 @@ async fn run_short_dialogue(
         audio_path: None,
         is_group: false,
         question_in_group: 0,
+            play_count: None,
     });
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
     interruptible_sleep(Duration::from_millis(answer_ms as u64 + 500), &skip_flag).await;
@@ -340,6 +348,7 @@ async fn run_group_dialogue(
             audio_path: None,
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
@@ -359,6 +368,7 @@ async fn run_group_dialogue(
             audio_path: audio_path.clone(),
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -392,6 +402,7 @@ async fn run_group_dialogue(
             audio_path: audio_path.clone(),
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
@@ -413,6 +424,7 @@ async fn run_group_dialogue(
             audio_path: None,
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Answering, answer_ms as u64, 100);
@@ -563,6 +575,7 @@ async fn run_retell(
             audio_path: None,
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let prepare_skipped = {
@@ -589,6 +602,7 @@ async fn run_retell(
             audio_path: audio_path.clone(),
             is_group: true,
             question_in_group: 0,
+            play_count: Some(1),
         },
     );
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
@@ -633,6 +647,7 @@ async fn run_retell(
             audio_path: audio_path.clone(),
             is_group: true,
             question_in_group: 0,
+            play_count: Some(2),
         },
     );
     let playing2_skipped = {
@@ -660,6 +675,7 @@ async fn run_retell(
             audio_path: None,
             is_group: true,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let fill_blank_skipped = {
@@ -698,6 +714,7 @@ async fn goto_playing_3(
             audio_path: audio_path.cloned(),
             is_group: true,
             question_in_group: 0,
+            play_count: Some(3),
         },
     );
     let play_ms = compute_play_ms(audio_path, 2_000);
@@ -729,6 +746,7 @@ async fn finish_recording_phases(
             audio_path: None,
             is_group: false,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::RecallPrep, recall_ms as u64, 100);
@@ -753,6 +771,7 @@ async fn finish_recording_phases(
             audio_path: None,
             is_group: false,
             question_in_group: 0,
+            play_count: None,
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Recording, recording_ms, 100);

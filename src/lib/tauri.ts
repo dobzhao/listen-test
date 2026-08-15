@@ -169,6 +169,9 @@ export interface FlowStatePayload {
   audioPath: string | null;
   isGroup: boolean;
   questionInGroup: number;
+  /** 15-19 题当前是第几次播放（null = 非 playing 或 1-14 题）。
+   * 仅 PLAYING #1/#2/#3 分别取值 1/2/3，前端据此在 PLAYING #3 禁用填空（Spec §3.4）。 */
+  playCount: number | null;
 }
 
 export interface AudioPlayPayload {

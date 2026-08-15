@@ -85,6 +85,9 @@ export default function TestPage() {
   const finished = useTestFlowStore((s) => s.finished);
   const error = useTestFlowStore((s) => s.error);
   const answers = useTestFlowStore((s) => s.answers);
+  // 15-19 题当前播放轮次：1=PLAYING#1, 2=PLAYING#2, 3=PLAYING#3（其余 null）。
+  // PLAYING #3 阶段挖空应禁用（Spec §3.4）。
+  const playCount = useTestFlowStore((s) => s.playCount);
 
   // 订阅所有后端事件
   useTestFlowEvents();
@@ -211,10 +214,13 @@ export default function TestPage() {
             enabled={nextEnabled}
           />
 
-          {/* 挖空表格 - 始终可见，playing 与 fill_blank 阶段都可填写 */}
+          {/* 挖空表格 - 始终可见；PLAYING #3（playCount===3）期间不可继续填写（Spec §3.4） */}
           <FillBlankTable
             table={session.retell.table}
-            enabled={phase === "playing" || phase === "fill_blank"}
+            enabled={
+              phase === "fill_blank" ||
+              (phase === "playing" && playCount !== 3)
+            }
           />
 
           {/* 录音面板 - 仅 recall_prep / recording 时 */}
