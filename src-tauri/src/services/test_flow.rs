@@ -549,6 +549,9 @@ async fn run_retell(
     let base_progress = 14.0 / 19.0; // 14 题已完成
 
     // 1. PREPARE — 可跳过
+    // 注意：每个阶段的计时器必须限定在自己的 { ... } block 内，
+    // 这样在 skip 触发进入 goto_playing_3 之前旧计时器就被 drop，
+    // 避免和 PLAYING #3 的新计时器并发 tick 造成进度条跳变。
     let prepare_ms = timing.retell_prepare_ms;
     emit_state(
         app,
@@ -562,9 +565,12 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
-    interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
-    if skip_flag.load(Ordering::Relaxed) {
+    let prepare_skipped = {
+        let _timer = PhaseTimer::start(app.clone(), Phase::Prepare, prepare_ms as u64, 100);
+        interruptible_sleep(Duration::from_millis(prepare_ms as u64 + 500), &skip_flag).await;
+        skip_flag.load(Ordering::Relaxed)
+    }; // _timer 在此 drop，取消 PREPARE 阶段的计时任务
+    if prepare_skipped {
         // 跳到 PLAYING #3 之前先清零，让 PLAYING #3 顺利完成
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
@@ -586,24 +592,30 @@ async fn run_retell(
         },
     );
     let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
-    play_audio(app, audio_path.clone()).await;
-    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
-    if skip_flag.load(Ordering::Relaxed) {
+    let playing1_skipped = {
+        let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+        play_audio(app, audio_path.clone()).await;
+        interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
+        skip_flag.load(Ordering::Relaxed)
+    }; // _timer 在此 drop
+    if playing1_skipped {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
         finish_recording_phases(app, container, timing.clone()).await;
         return Ok(());
     }
 
-    // 静音间隔 — 可跳过
+    // 静音间隔 — 可跳过（无计时器，无需 block 限定）
     let pause_ms = timing.retell_pause_ms;
     let _ = app.emit(
         AUDIO_PLAY_EVENT,
         &serde_json::json!({ "path": null, "loop": false }),
     );
-    interruptible_sleep(Duration::from_millis(pause_ms as u64 + 500), &skip_flag).await;
-    if skip_flag.load(Ordering::Relaxed) {
+    let pause_skipped = {
+        interruptible_sleep(Duration::from_millis(pause_ms as u64 + 500), &skip_flag).await;
+        skip_flag.load(Ordering::Relaxed)
+    };
+    if pause_skipped {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
         finish_recording_phases(app, container, timing.clone()).await;
@@ -623,10 +635,13 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
-    play_audio(app, audio_path.clone()).await;
-    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
-    if skip_flag.load(Ordering::Relaxed) {
+    let playing2_skipped = {
+        let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+        play_audio(app, audio_path.clone()).await;
+        interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
+        skip_flag.load(Ordering::Relaxed)
+    }; // _timer 在此 drop
+    if playing2_skipped {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
         finish_recording_phases(app, container, timing.clone()).await;
@@ -647,9 +662,12 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
-    let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, fill_ms as u64, 100);
-    interruptible_sleep(Duration::from_millis(fill_ms as u64 + 500), &skip_flag).await;
-    if skip_flag.load(Ordering::Relaxed) {
+    let fill_blank_skipped = {
+        let _timer = PhaseTimer::start(app.clone(), Phase::FillBlank, fill_ms as u64, 100);
+        interruptible_sleep(Duration::from_millis(fill_ms as u64 + 500), &skip_flag).await;
+        skip_flag.load(Ordering::Relaxed)
+    }; // _timer 在此 drop，FILL_BLANK 计时器在进入 PLAYING #3 之前已停止
+    if fill_blank_skipped {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
         finish_recording_phases(app, container, timing.clone()).await;
