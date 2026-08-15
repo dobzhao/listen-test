@@ -147,6 +147,7 @@ pub fn reset_test_flow(
     guard.state = None;
     guard.finished = false;
     guard.skip_requested.store(false, Ordering::Relaxed);
+    guard.recording_completed.store(false, Ordering::Relaxed);
     // correct_answers / audio_paths 由 init_container_from_session 重新填充
     Ok(())
 }
@@ -174,5 +175,14 @@ pub fn skip_to_next(
     if let Some(f) = stop_flag {
         f.store(true, Ordering::Relaxed);
     }
+    Ok(())
+}
+
+/// Q19 用户点击"提前结束录音"按钮：
+/// 通知后端 `finish_recording_phases` 立即跳出剩余录音等待，进入评分阶段。
+/// 由前端在 `stopRecording` 写入 wav 并 `submit_answer(19, path)` 之后调用。
+#[tauri::command]
+pub fn notify_recording_completed(flow: State<'_, FlowGlobal>) -> Result<(), String> {
+    flow.container.notify_recording_completed();
     Ok(())
 }

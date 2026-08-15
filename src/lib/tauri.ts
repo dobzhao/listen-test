@@ -220,6 +220,15 @@ export async function skipToNext(): Promise<void> {
   await invoke("skip_to_next");
 }
 
+/**
+ * Q19 用户点击"提前结束录音"按钮：
+ * - 通知后端 finish_recording_phases 立即跳出剩余录音等待
+ * - 进入评分阶段，无需再等满 90 秒
+ */
+export async function notifyRecordingCompleted(): Promise<void> {
+  await invoke("notify_recording_completed");
+}
+
 export async function onTimerTick(
   handler: (payload: TimerTickPayload) => void
 ): Promise<UnlistenFn> {

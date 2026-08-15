@@ -16,6 +16,7 @@ import {
   stopRecording,
   getAudioLevel,
   submitAnswer,
+  notifyRecordingCompleted,
 } from "@/lib/tauri";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { useTestStore } from "@/store/test";
@@ -78,6 +79,12 @@ export function useRecorder(): RecorderHookResult {
         await submitAnswer(19, resp.outputPath);
       } catch (e) {
         console.error("submit_answer(q19) 失败", e);
+      }
+      // 通知后端：录音已结束，跳过剩余的 90 秒等待，立即进入评分阶段
+      try {
+        await notifyRecordingCompleted();
+      } catch (e) {
+        console.error("notify_recording_completed 失败", e);
       }
     } catch (e) {
       console.error("停止录音失败", e);

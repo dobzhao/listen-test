@@ -73,6 +73,8 @@ pub struct FlowStateInner {
     pub audio_paths: HashMap<String, String>,
     /// 前端点击"下一题"触发的跳转请求；各 run_* 阶段定期检查
     pub skip_requested: Arc<AtomicBool>,
+    /// 用户在 Q19 点击"提前结束录音"时设置；让 RECORDING 阶段 sleep 提前返回
+    pub recording_completed: Arc<AtomicBool>,
 }
 
 impl Default for FlowStateInner {
@@ -85,6 +87,7 @@ impl Default for FlowStateInner {
             group_membership: HashMap::new(),
             audio_paths: HashMap::new(),
             skip_requested: Arc::new(AtomicBool::new(false)),
+            recording_completed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -98,6 +101,23 @@ impl Default for FlowStateContainer {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(FlowStateInner::default())),
+        }
+    }
+}
+
+impl FlowStateContainer {
+    /// Q19 用户点击"提前结束录音"时由前端命令调用：
+    /// 唤醒 `finish_recording_phases` 中的 `interruptible_sleep`，立即进入评分阶段。
+    pub fn notify_recording_completed(&self) {
+        if let Ok(guard) = self.inner.lock() {
+            guard.recording_completed.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// 重置录音完成标志（用于新一轮测试会话开始时）
+    pub fn reset_recording_completed(&self) {
+        if let Ok(guard) = self.inner.lock() {
+            guard.recording_completed.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -399,6 +419,11 @@ fn skip_flag_clone(container: &FlowStateContainer) -> Arc<AtomicBool> {
     container.inner.lock().unwrap().skip_requested.clone()
 }
 
+/// 取出当前实例的 recording_completed 引用（Arc clone）
+fn recording_completed_clone(container: &FlowStateContainer) -> Arc<AtomicBool> {
+    container.inner.lock().unwrap().recording_completed.clone()
+}
+
 /// 可中断睡眠：每 100ms 检查一次 skip_flag，若被设置则提前返回
 async fn interruptible_sleep(duration: Duration, skip_flag: &Arc<AtomicBool>) {
     let step = Duration::from_millis(100);
@@ -639,7 +664,10 @@ async fn finish_recording_phases(
     sleep(Duration::from_millis(recall_ms as u64 + 500)).await;
 
     // 6. RECORDING（固定 90 秒，不读取 TimingConfig）
+    // 可被"提前结束录音"中断（前端调用 notify_recording_completed 命令）
     let recording_ms: u64 = 90_000;
+    let recording_flag = recording_completed_clone(container);
+    recording_flag.store(false, Ordering::Relaxed);
     let _ = app.emit(
         RECORD_START_EVENT,
         &serde_json::json!({ "durationMs": recording_ms }),
@@ -657,7 +685,7 @@ async fn finish_recording_phases(
         },
     );
     let _timer = PhaseTimer::start(app.clone(), Phase::Recording, recording_ms, 100);
-    sleep(Duration::from_millis(recording_ms + 500)).await;
+    interruptible_sleep(Duration::from_millis(recording_ms + 500), &recording_flag).await;
 
     let _ = app.emit(RECORD_STOP_EVENT, &serde_json::json!({}));
     info!("15-19 题流程完成");
