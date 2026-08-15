@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-/// 应用数据根目录（如 Linux 下 `~/.local/share/com.peiyuan.app`）
+/// 应用数据根目录（如 Linux 下 `~/.local/share/com.peiyuan.desktop`）
 pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()

@@ -3,8 +3,8 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // Tauri 2.0 推荐 Vite 配置：固定端口、关闭清屏、设置环境变量
-export default defineConfig(async () => ({
-  plugins: [react()],
+export default defineConfig({
+  plugins: react(),
 
   // 防止 Vite 清除终端输出，方便查看 Tauri 日志
   clearScreen: false,
@@ -41,4 +41,4 @@ export default defineConfig(async () => ({
     // 生成 sourcemap
     sourcemap: !!process.env.TAURI_DEBUG,
   },
-}));
+});

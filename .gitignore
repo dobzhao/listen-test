@@ -27,3 +27,8 @@ dist-ssr
 src-tauri/target/
 src-tauri/Cargo.lock
 src-tauri/gen/
+
+# TypeScript 项目引用编译产物（tsconfig.node.json 的 composite: true 会强制 emit）
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
