@@ -45,6 +45,25 @@ pub fn read_info(path: &Path) -> Result<WavInfo, WavError> {
     })
 }
 
+/// 计算 wav 文件的播放时长（毫秒）
+///
+/// 通过读取 WAV 头的总采样数与采样率得到。仅读取头部，不解码样本数据。
+/// 用于在测试流程中预先计算 PLAYING 阶段的倒计时总长，让前端进度条
+/// 在音频播放期间能真实反映剩余时间，而不是卡在 0 秒不动。
+pub fn duration_ms(path: &Path) -> Result<u64, WavError> {
+    let reader = WavReader::open(path)?;
+    let spec = reader.spec();
+    let total_samples = reader.duration() as u64;
+    let sample_rate = spec.sample_rate as u64;
+    if sample_rate == 0 {
+        return Err(WavError::SpecMismatch {
+            actual: "sample_rate=0".into(),
+            expected: "sample_rate>0".into(),
+        });
+    }
+    Ok((total_samples * 1000) / sample_rate)
+}
+
 /// 把任意 wav 文件读取为 i16 采样（自动展平多声道为单声道）。
 ///
 /// - 单声道：直接取样

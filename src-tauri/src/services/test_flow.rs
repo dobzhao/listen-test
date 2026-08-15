@@ -282,9 +282,13 @@ async fn run_short_dialogue(
         is_group: false,
         question_in_group: 0,
     });
+    // 用真实音频时长驱动进度条；若读不到则 fallback 2 秒。
+    let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
     play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    // play_audio 期间计时器已在跑；这里只需一个短缓冲等待最终 tick，
+    // 不应再叠加 play_ms（否则总时长 ≈ 2 倍音频长度）。
+    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -357,9 +361,10 @@ async fn run_group_dialogue(
             question_in_group: 0,
         },
     );
+    let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
     play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -377,8 +382,8 @@ async fn run_group_dialogue(
 
     // PLAYING #2
     play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
     }
@@ -417,6 +422,26 @@ fn emit_state(app: &AppHandle, container: &FlowStateContainer, state: FlowState)
 /// 取出当前实例的 skip_requested 引用（Arc clone）
 fn skip_flag_clone(container: &FlowStateContainer) -> Arc<AtomicBool> {
     container.inner.lock().unwrap().skip_requested.clone()
+}
+
+/// 计算音频文件的实际播放时长（毫秒）。
+///
+/// 用于在测试流程的 PLAYING 阶段启动对应时长的计时器，让前端进度条
+/// 在音频播放期间能真实反映剩余时间，而不是卡在"剩余 0 秒"。
+///
+/// 读不到时长（路径为 None、文件缺失/损坏）时返回 fallback_ms。
+fn compute_play_ms(path: Option<&String>, fallback_ms: u64) -> u64 {
+    let Some(p) = path else {
+        return fallback_ms;
+    };
+    let pb = PathBuf::from(p);
+    if !pb.exists() {
+        return fallback_ms;
+    }
+    crate::utils::wav::duration_ms(&pb)
+        .ok()
+        .filter(|&ms| ms > 0)
+        .unwrap_or(fallback_ms)
 }
 
 /// 取出当前实例的 recording_completed 引用（Arc clone）
@@ -547,9 +572,10 @@ async fn run_retell(
             question_in_group: 0,
         },
     );
+    let play_ms = compute_play_ms(audio_path.as_ref(), 2_000);
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
     play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100); // 余量 2 秒
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
@@ -573,8 +599,8 @@ async fn run_retell(
 
     // PLAYING #2 — 可跳过
     play_audio(app, audio_path.clone()).await;
-    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, 2_000, 100);
-    interruptible_sleep(Duration::from_millis(2_500), &skip_flag).await;
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+    interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
         goto_playing_3(app, container, audio_path.as_ref()).await;
@@ -631,9 +657,11 @@ async fn goto_playing_3(
             question_in_group: 0,
         },
     );
+    let play_ms = compute_play_ms(audio_path, 2_000);
+    let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
     play_audio(app, audio_path.cloned()).await;
-    // 此处 sleep 不再受 skip_flag 影响（已清零）；仍给一个固定余量。
-    sleep(Duration::from_millis(2_500)).await;
+    // 此处 sleep 不再受 skip_flag 影响（已清零）；仅给一个小余量确保最终 tick 发出。
+    sleep(Duration::from_millis(500)).await;
 }
 
 /// 15-19 题第 5-6 步：RECALL_PREP + RECORDING
