@@ -83,7 +83,6 @@ mod tests {
         let err = render("Hello, {{NAME}}", &vars).unwrap_err();
         match err {
             PromptError::MissingVar(k) => assert_eq!(k, "NAME"),
-            _ => panic!("wrong error"),
         }
     }
 
