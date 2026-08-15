@@ -380,9 +380,22 @@ async fn run_group_dialogue(
         return Ok(());
     }
 
-    // PLAYING #2
-    play_audio(app, audio_path.clone()).await;
+    // PLAYING #2 — 显式重置进度并先启动计时器再播音频，
+    // 否则音频播完之前没有 timer-tick，前端进度条不会动。
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: first,
+            phase: Phase::Playing,
+            progress: 0.0,
+            audio_path: audio_path.clone(),
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+    play_audio(app, audio_path.clone()).await;
     interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         return Ok(());
@@ -597,9 +610,21 @@ async fn run_retell(
         return Ok(());
     }
 
-    // PLAYING #2 — 可跳过
-    play_audio(app, audio_path.clone()).await;
+    // PLAYING #2 — 可跳过；先启动计时器再播音频，并显式重置进度。
+    emit_state(
+        app,
+        container,
+        FlowState {
+            question_index: 15,
+            phase: Phase::Playing,
+            progress: base_progress + 0.05,
+            audio_path: audio_path.clone(),
+            is_group: true,
+            question_in_group: 0,
+        },
+    );
     let _timer = PhaseTimer::start(app.clone(), Phase::Playing, play_ms, 100);
+    play_audio(app, audio_path.clone()).await;
     interruptible_sleep(Duration::from_millis(500), &skip_flag).await;
     if skip_flag.load(Ordering::Relaxed) {
         skip_flag.store(false, Ordering::Relaxed);
