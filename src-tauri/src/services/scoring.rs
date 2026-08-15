@@ -17,14 +17,6 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tracing::{info, warn};
 
-/// 安全截断字符串到 N 个字符（不是字节），避免在多字节字符中间切割
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s, // 不足 max_chars 个字符
-    }
-}
-
 /// 15-18 题 LLM 评分的单项结构：LLM 返回的每空得分明细
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -167,7 +159,7 @@ pub async fn score_blanks_15_18(
     let client = build_client().map_err(|e| ScoringError::HttpClient(e.to_string()))?;
     let text = call_llm(&client, llm_cfg, llm_params, prompt).await?;
 
-    info!("15-18 题评分 LLM 返回：{}", truncate_chars(&text, 200));
+    info!("15-18 题评分 LLM 返回：{}", text);
 
     let parsed: BlankScoreResp = try_parse(&text)?;
     let items = parsed.blanks;
@@ -272,7 +264,7 @@ pub async fn score_retell_19(
         }
     };
 
-    info!("STT 转写结果（前 200 字）：{}", truncate_chars(&stt_text, 200));
+    info!("STT 转写结果：{}", stt_text);
 
     // 2. LLM 评分
     let mut vars = HashMap::new();
@@ -315,7 +307,7 @@ pub async fn score_retell_19(
         }
     };
 
-    info!("19 题评分 LLM 返回：{}", truncate_chars(&text, 200));
+    info!("19 题评分 LLM 返回：{}", text);
 
     // 解析评分
     #[derive(Debug, Deserialize)]
@@ -337,7 +329,7 @@ pub async fn score_retell_19(
         Err(e) => RetellResult {
             score: 0.0,
             max_score: 10.0,
-            comment: format!("评分解析失败: {e}\n原始返回: {}", truncate_chars(&text, 300)),
+            comment: format!("评分解析失败: {e}\n原始返回: {}", text),
             stt_text,
         },
     }

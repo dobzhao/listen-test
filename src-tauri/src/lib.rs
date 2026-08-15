@@ -12,19 +12,58 @@ use commands::config::ConfigState;
 use commands::recorder::RecorderGlobal;
 use commands::test_flow::FlowGlobal;
 use commands::test_session::SessionState;
-use tracing_subscriber::EnvFilter;
+use std::io;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// 初始化日志：stdout + 文件双输出
+///
+/// 文件路径：`<app_data_dir>/logs/peiyuan.log.YYYY-MM-DD`（按天滚动）
+/// 级别：默认 `info`，可被 `RUST_LOG` 覆盖
+/// 文件初始化失败时回退到 stdout-only，不阻塞应用启动
+/// 返回的 `WorkerGuard` 必须保留到进程结束，drop 时自动 flush
+fn init_logging() -> WorkerGuard {
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // 文件输出（rolling::daily 自动加日期后缀）。失败时回退到 io::sink()（丢弃），
+    // 避免在 WorkerGuard 返回值上让 stdout 与 file 两条路径出现类型不匹配
+    let (file_writer, guard) = match utils::path::logs_dir() {
+        Ok(logs_dir) => {
+            let appender = tracing_appender::rolling::daily(&logs_dir, "peiyuan.log");
+            tracing_appender::non_blocking(appender)
+        }
+        Err(e) => {
+            eprintln!("[peiyuan] 无法初始化文件日志 ({e})，仅写入 stdout");
+            tracing_appender::non_blocking(io::sink())
+        }
+    };
+
+    let stdout_layer = fmt::layer()
+        .with_writer(io::stdout)
+        .with_target(false)
+        .compact();
+
+    let file_layer = fmt::layer()
+        .with_writer(move || file_writer.clone())
+        .with_ansi(false)
+        .with_target(false)
+        .compact();
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+
+    guard
+}
 
 /// Tauri 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志（默认 INFO 级别，RUST_LOG 可覆盖）
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .compact()
-        .init();
+    // _log_guard 必须活到进程结束；drop 时 non-blocking 自动 flush
+    let _log_guard = init_logging();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
