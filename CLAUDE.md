@@ -62,7 +62,7 @@
 - 测试缓存：`{app_data_dir}/cache/{session_uuid}/`
   - 题目内容、生成的音频片段
   - `recording.wav` — Q19 用户录音（落盘前下采样到 mono 16kHz PCM，详见 §4.4.10）
-- 设备测试录音：`{app_data_dir}/device-tests/` （当前代码无引用，见 §六）
+- 设备测试录音：`{app_data_dir}/device-tests/` （由 `commands/device.rs::test_input_device` 按需创建）
 - 日志：`{app_data_dir}/logs/peiyuan.log.YYYY-MM-DD` — 按天滚动，详见 §4.4.13
 
 平台路径（应用 identifier 为 `com.peiyuan.desktop`，与 `tauri.conf.json:5` 一致）：
@@ -98,7 +98,7 @@ peiyuan/
 │   │   │   ├── llm.rs                 # test_llm_connection / generate_with_llm
 │   │   │   ├── tts.rs                 # test_tts_connection
 │   │   │   ├── stt.rs                 # test_stt_connection / transcribe_audio
-│   │   │   ├── audio.rs               # play_audio_file / play_audio_background / play_audio_blocking（stop_audio 已定义但未注册，见 §六）
+│   │   │   ├── audio.rs               # play_audio_file / play_audio_background（切歌由 skip_to_next 通过 AudioPlaybackState.active_stop_flag 实现）
 │   │   │   ├── recorder.rs            # start_recording / stop_recording / get_audio_level
 │   │   │   ├── device.rs              # list_input/output_devices / test_input/output_device
 │   │   │   ├── test_session.rs        # generate_test_session / get_test_session / clear_test_session
@@ -349,12 +349,7 @@ npm run tauri:build -- --target x86_64-unknown-linux-gnu # Linux
 
 | 项目 | 文件 | 说明 |
 |------|------|------|
-| `stop_audio` 命令未注册 | `src-tauri/src/commands/audio.rs` | 函数已定义，但 `src-tauri/src/lib.rs:75` 的 `invoke_handler!` 数组未注册它；前端 `src/lib/tauri.ts` 也未封装。孤儿代码。 |
 | `test-score-progress` 事件未发射 | `src-tauri/src/services/scoring.rs` | `ScoreProgress` 结构与 `SCORE_PROGRESS_EVENT` 常量已定义，但 `score_full_test` 全程未调用 `emit()`。前端无 listener。死代码。 |
-| `device-tests/` 目录孤儿 | 文档 §2.3 | CLAUDE.md 提到，但代码全项目 `grep` 无任何引用。可考虑从文档删除该条目。 |
-| `play_audio_blocking` 未被前端调用 | `src-tauri/src/commands/audio.rs` | 已注册，但前端 `src/lib/tauri.ts` 无对应封装，运行时无调用方。疑似早期遗留。 |
-| `FlowStateInner.group_membership` 字段未文档化 | `src-tauri/src/services/test_flow.rs` | 内部使用（题号 → 组号映射，用于 5-12 题共享 ANSWERING 时段），但 CLAUDE.md §4.2 此前未提及。现已补回 §4.2。 |
-| 章节编号历史跳过「六」 | 文档结构 | 原 §五 → §七 跳号。已通过新增本章节修正。 |
 
 ---
 

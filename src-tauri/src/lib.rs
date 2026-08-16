@@ -93,7 +93,6 @@ pub fn run() {
             commands::device::test_output_device,
             // 音频播放
             commands::audio::play_audio_file,
-            commands::audio::play_audio_blocking,
             commands::audio::play_audio_background,
             // 测试会话预生成
             commands::test_session::generate_test_session,

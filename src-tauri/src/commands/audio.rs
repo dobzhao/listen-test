@@ -2,12 +2,11 @@
 //!
 //! - `play_audio_file`：启动非阻塞播放，立即返回
 //! - `play_audio_background`：非阻塞播放（设备测试回放录音等）
-//! - `play_audio_blocking`：阻塞播放，调用方 await
-//! - `stop_audio`：停止当前由测试流程发起的播放（下一题切歌用）
+//! - 「下一题」切歌：`skip_to_next` 通过 `AudioPlaybackState.active_stop_flag` 设置停止信号
 
 use crate::services::audio_player::{play_wav_blocking, play_wav_nonblocking};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 use tracing::{error, info};
@@ -15,7 +14,7 @@ use tracing::{error, info};
 /// 全局音频播放状态
 pub struct AudioPlaybackState {
     pub is_playing: Arc<Mutex<bool>>,
-    /// 当前由测试流程启动的播放的停止信号，stop_audio 命令可借此切歌
+    /// 当前由测试流程启动的播放的停止信号，`skip_to_next` 通过此字段切歌
     pub active_stop_flag: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
@@ -68,35 +67,11 @@ pub async fn play_audio_file(
 }
 
 #[tauri::command]
-pub async fn play_audio_blocking(path: String) -> Result<(), String> {
-    let pb = PathBuf::from(&path);
-    if !pb.exists() {
-        return Err(format!("音频文件不存在: {path}"));
-    }
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    tokio::task::spawn_blocking(move || play_wav_blocking(&pb, stop_flag))
-        .await
-        .map_err(|e| format!("spawn_blocking 失败: {e}"))?
-        .map_err(|e| format!("播放失败: {e}"))?;
-    Ok(())
-}
-
-#[tauri::command]
 pub fn play_audio_background(path: String) -> Result<(), String> {
     let pb = PathBuf::from(&path);
     if !pb.exists() {
         return Err(format!("音频文件不存在: {path}"));
     }
     play_wav_nonblocking(pb);
-    Ok(())
-}
-
-/// 停止当前由测试流程发起的播放（不影响设备测试的回放）
-#[tauri::command]
-pub fn stop_audio(state: State<'_, AudioPlaybackState>) -> Result<(), String> {
-    let flag = state.active_stop_flag.lock().unwrap().clone();
-    if let Some(f) = flag {
-        f.store(true, Ordering::Relaxed);
-    }
     Ok(())
 }
