@@ -18,9 +18,8 @@
 
 ### 1.3 目标用户
 
-- 需要练习英语听说的学生/教师
-- 部署本地/自建模型服务的开发者
-- 英语考试培训机构
+- 需要练习英语听说的学生
+
 
 ### 1.4 平台支持
 
@@ -268,7 +267,8 @@ Form-data: file=audio.wav, model=..., language=en
 3. **STT**：同上
 4. **提示词**：5 个 Prompt 模板可编辑 + 恢复默认
 5. **音频**：播放音量、麦克风增益、TTS 拼接静音时长
-6. **设备测试**：可选输入/输出设备 + 录音测试 + 测试音播放
+6. **流程时长**：答题过程每个阶段等待时长 + 恢复默认
+7. **设备测试**：可选输入/输出设备 + 录音测试 + 测试音播放
 
 每个模型配置都有"测试连接"按钮（最小请求验证）。
 
@@ -331,81 +331,14 @@ Form-data: file=audio.wav, model=..., language=en
 
 ---
 
-## 九、目录结构
 
-```
-peiyuan/
-├── src/                              # 前端 React + TS
-│   ├── components/
-│   │   ├── ui/                       # shadcn/ui 基础组件
-│   │   ├── settings/                 # 设置相关
-│   │   ├── test/                     # 测试组件
-│   │   ├── ErrorBoundary.tsx
-│   │   └── Toast.tsx
-│   ├── pages/                         # MainMenu / Settings / Test / Result
-│   ├── store/                         # Zustand
-│   ├── hooks/                         # 自定义 hooks
-│   ├── types/                         # TypeScript 类型
-│   ├── lib/                           # tauri invoke 封装
-│   ├── App.tsx
-│   └── main.tsx
-│
-├── src-tauri/                         # 后端 Rust
-│   ├── src/
-│   │   ├── commands/                  # Tauri commands
-│   │   ├── services/                  # 内部服务层
-│   │   ├── models/                    # 数据结构
-│   │   ├── utils/                     # 工具函数
-│   │   ├── lib.rs
-│   │   └── main.rs
-│   ├── prompts/                       # 默认 Prompt 模板
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   └── build.rs
-│
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-├── tailwind.config.js
-├── components.json
-├── Spec.md                            # 本文件
-├── CLAUDE.md                          # 项目说明
-└── README.md                          # 启动 / 打包指南
-```
-
----
-
-## 十、阶段交付清单
-
-| Phase | 内容 | 状态 |
-|-------|------|------|
-| 1 | 项目骨架 + 设置界面 | ✅ |
-| 2 | LLM/TTS 客户端 + 题目预生成流水线 | ✅ |
-| 3 | 1-14 题完整测试流程 | ✅ |
-| 4 | 15-19 题挖空表格 + 录音 | ✅ |
-| 5 | 判分 + 结算页 | ✅ |
-| 6 | 错误处理 + 日志 + 跨平台打包 | ✅ |
-
----
-
-## 十一、未来扩展（可选）
-
-1. 错题本：自动收集错题、间隔重复
-2. 难度自适应：根据正确率动态调整下一题难度
-3. 历史记录：每次测试结果持久化，支持趋势分析
-4. 多语言支持：UI 与 Prompt 中英文可切换
-5. 自定义角色：允许用户上传自己的 voice 模型
-6. 题目导出：将测试题目导出为 PDF/Anki 卡片
-
----
-
-## 十二、配置兼容性
+## 九、配置兼容性
 
 `config.json` 中新增字段（如 `protocol`）通过 `#[serde(default = ...)]` 自动回退到默认值，向后兼容旧配置文件，无需用户手动迁移。
 
 ---
 
-## 十三、已知约束
+## 十、已知约束
 
 1. **单次测试题目内容不可恢复**：缓存清理后无法重新查看
 2. **TTS 输出采样率依赖服务**：当前代码假定所有 TTS 输出采样率一致，拼接 wav 时统一
