@@ -58,6 +58,17 @@ pub async fn transcribe(
     if trimmed.is_empty() {
         return Err(SttError::Empty);
     }
+
+    // 兼容两种 STT 响应：
+    //   - verbose_json（含 text / language / segments / tokens 等元数据）→ 仅取 text
+    //   - 纯文本 → 原样返回
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(t) = json.get("text").and_then(|v| v.as_str()) {
+            debug!("STT 返回 verbose_json 格式，已提取 text 字段");
+            return Ok(t.trim().to_string());
+        }
+    }
+
     Ok(trimmed.to_string())
 }
 
