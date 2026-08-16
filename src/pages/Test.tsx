@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2, Play, FileText, SkipForward } from "lucide-react";
 import { useTestStore } from "@/store/test";
+import { confirm } from "@/store/confirm";
 import {
   PHASE_LABELS,
   useTestFlowStore,
@@ -287,8 +288,8 @@ export default function TestPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              if (window.confirm("确认放弃本次测试？所有作答将被清空。")) {
+            onClick={async () => {
+              if (await confirm("确认放弃本次测试？所有作答将被清空。")) {
                 reset();
                 navigate("/");
               }
@@ -387,8 +388,8 @@ export default function TestPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => {
-            if (window.confirm("确认放弃本次测试？所有作答将被清空。")) {
+          onClick={async () => {
+            if (await confirm("确认放弃本次测试？所有作答将被清空。")) {
               reset();
               navigate("/");
             }

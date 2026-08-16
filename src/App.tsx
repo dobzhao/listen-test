@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useSettingsStore } from "@/store/settings";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import MainMenu from "@/pages/MainMenu";
 import SettingsPage from "@/pages/Settings";
 import TestPage from "@/pages/Test";
@@ -18,12 +19,17 @@ export default function App() {
   }, [loaded, load]);
 
   return (
-    <Routes>
-      <Route path="/" element={<MainMenu />} />
-      <Route path="/settings" element={<SettingsPage />} />
-      <Route path="/test" element={<TestPage />} />
-      <Route path="/result" element={<ResultPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      {/* 全局确认对话框：替代 window.confirm()，规避 macOS WKWebView 下
+          wry 未实现 confirm panel 的问题。 */}
+      <ConfirmDialog />
+      <Routes>
+        <Route path="/" element={<MainMenu />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/test" element={<TestPage />} />
+        <Route path="/result" element={<ResultPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   );
 }

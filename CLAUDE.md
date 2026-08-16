@@ -78,13 +78,13 @@
 peiyuan/
 ├── src/                              # 前端 React + TS
 │   ├── components/
-│   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）
+│   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog（全局确认弹窗，见 §4.4.15）
 │   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / GenerationPreview / LlmParamsPanel / TimingPanel
 │   │   ├── test/                     # GlobalHeader / PhaseCountdown / QuestionDisplay / FillBlankTable / RecorderPanel
 │   │   ├── ErrorBoundary.tsx
 │   │   └── Toast.tsx
 │   ├── pages/                         # MainMenu / Settings / Test / Result
-│   ├── store/                         # Zustand: settings / test / testFlow / result
+│   ├── store/                         # Zustand: settings / test / testFlow / result / confirm（全局确认对话框，见 §4.4.15）
 │   ├── hooks/                         # useTimerEvent / useAudioPlayer / useRecorder / useGenerationProgress / useTestFlowEvents
 │   ├── types/                         # TypeScript 类型（与 Rust models/ 对齐）
 │   ├── lib/                           # tauri invoke 封装 + utils
@@ -225,49 +225,6 @@ cpal::Stream 标记为 `!Send + !Sync`，无法在 Tauri State 中直接保存�
 - 前端使用 `src/lib/utils.ts::truncate(s, max)`。
 - 后端日志直接打印完整字符串，不再做截断（日志已落盘，原 `truncate_chars` 工具已删除）。
 
-#### 4.4.8 可配置时长（TimingConfig）
-`models/config.rs` 新增 `TimingConfig` 结构，包含 10 个字段：
-`intro_ms`、`short_dialogue_prepare_ms`、`short_dialogue_answer_ms`、`group_prepare_ms`、`group_pause_ms`、`group_answer_ms`、`retell_prepare_ms`、`retell_pause_ms`、`retell_fill_blank_ms`、`retell_recall_prep_ms`。
-
-- 所有阶段时长（**RECORDING 固定 90s 除外**）均可在设置界面 `components/settings/TimingPanel.tsx` 编辑
-- 新增命令 `restore_default_timing`（一键恢复默认时长）、`open_config_dir`（暴露配置文件所在目录，便于调试）
-- 详见 §4.6 状态机
-
-#### 4.4.9 可中断睡眠与「下一题」
-- 新增 `interruptible_sleep()` 工具（位于 `services/test_flow.rs`），每 100ms 轮询传入的 `Arc<AtomicBool>` 信号位
-- 新增命令 `skip_to_next`：在 15-19 题的 PREPARE / PLAYING #1 / pause / PLAYING #2 / FILL_BLANK 阶段可用，点击后直接跳到 PLAYING #3
-- 不可跳过的阶段：PLAYING #3 / RECALL_PREP / RECORDING（保证最后两段答题时间不被压缩）
-- 中断机制：`skip_to_next` 同时设置 `FlowStateInner.skip_requested` 与 `AudioPlaybackState.active_stop_flag`，让 rodio 立即停止播放
-
-#### 4.4.10 Q19 录音持久化与重采样
-- `commands/recorder.rs::WorkerCommand::Start/Stop` 现在携带 `SupportedStreamConfig`、采样率、声道数，方便 worker 线程拿到真实流配置
-- `services/recorder.rs` 新增 `downmix_to_mono()` 和 `linear_resample()`
-- 录音落盘前统一下采样到 **mono 16kHz PCM**，保存到 `{app_data_dir}/cache/{session_id}/recording.wav`
-- 解决了早期版本录音无法被 STT 服务读取的兼容性问题
-
-#### 4.4.11 Q19 录音提前结束
-- 新增命令 `notify_recording_completed`：用户点击「提前结束录音」按钮触发
-- `FlowStateInner.recording_completed: Arc<AtomicBool>` 用于 `interruptible_sleep` 轮询退出 RECORDING 阶段
-- 否则 RECORDING 固定 90s
-
-#### 4.4.12 15-18 题评分改造
-- `prompts/q15_18_scoring.txt`（commit `676d360`）已从纯字符串匹配改为每空 LLM JSON 评分
-- LLM 返回的 JSON 形状：`[{ blank_id, is_correct, score, user_answer, correct_answer, total_score }, ...]`
-- `services/scoring.rs` 大幅扩展（+311 行），解析该数组
-- 每空 1.5 分（共 4 空 = 6 分），0 / 1.5 二档
-
-#### 4.4.13 文件日志
-- `tracing-appender::rolling::daily` 按天滚动写入 `{app_data_dir}/logs/peiyuan.log.YYYY-MM-DD`（**无大小上限、无自动清理**）
-- `init_logging()` 在 `src-tauri/src/lib.rs:19-60`，stdout + 文件双写；文件层禁用 ANSI
-- 文件初始化失败回退到 `io::sink()`（丢弃文件层，仅保留 stdout），并 `eprintln!` 警告，不阻塞应用启动
-- `_log_guard: WorkerGuard` 必须保留到进程结束（drop 时 flush），`run()` 中绑定为 `let _log_guard = init_logging();`
-- 日志级别默认 `info`，可被 `RUST_LOG` 环境变量覆盖
-- **前端无任何方式读取后端日志**（无 Tauri 事件、无 UI 面板），仅 webview DevTools 控制台可见前端 `console.*` 输出
-
-#### 4.4.14 播放进度真实时长
-- `utils/wav.rs` 新增 `duration_ms()`；`services/test_flow.rs` 新增 `compute_play_ms()`
-- PLAYING 计时器由音频真实时长驱动，不再依赖硬编码
-- 5-14 题第二次播放进度条异常的修复（commit `b59d4ea`）：在两次 PLAYING 之间的静音间隔期间发射 `test-audio-play { path: null }`，并显式重置 `progress = 0.0` 后再启动第二次播放计时器
 
 ### 4.5 模块分层
 

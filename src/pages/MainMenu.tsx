@@ -15,6 +15,7 @@ import { Play, Settings as SettingsIcon, Headphones, Loader2, RefreshCw } from "
 import { useSettingsStore } from "@/store/settings";
 import { useTestStore, STAGE_LABELS } from "@/store/test";
 import { useGenerationProgress } from "@/hooks/useGenerationProgress";
+import { confirm } from "@/store/confirm";
 
 export default function MainMenu() {
   const navigate = useNavigate();
@@ -56,7 +57,7 @@ export default function MainMenu() {
 
   const handleResetAndStart = async () => {
     // 重置会话状态后重新生成（用于生成失败后重试）
-    if (window.confirm("重新生成将丢弃当前已生成的题目与作答。继续？")) {
+    if (await confirm("重新生成将丢弃当前已生成的题目与作答。继续？")) {
       resetSession();
       handleStart();
     }

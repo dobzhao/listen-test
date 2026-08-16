@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, Save, RotateCcw } from "lucide-react";
 import { useSettingsStore } from "@/store/settings";
+import { confirm } from "@/store/confirm";
 import { ModelConfigForm } from "@/components/settings/ModelConfigForm";
 import { PromptEditor } from "@/components/settings/PromptEditor";
 import { GenerationPreview } from "@/components/settings/GenerationPreview";
@@ -64,7 +65,7 @@ export default function SettingsPage() {
   };
 
   const handleReset = async () => {
-    if (!window.confirm("确认重置全部配置为默认值？\n此操作不可撤销。")) return;
+    if (!(await confirm("确认重置全部配置为默认值？\n此操作不可撤销。"))) return;
     await reset();
     setSaveStatus("✓ 已重置");
     setTimeout(() => setSaveStatus(null), 2000);

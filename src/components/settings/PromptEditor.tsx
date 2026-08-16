@@ -8,6 +8,7 @@ import { RotateCcw } from "lucide-react";
 import { PROMPT_PLACEHOLDERS } from "@/types/config";
 import type { PromptKey } from "@/types/config";
 import { useSettingsStore } from "@/store/settings";
+import { confirm } from "@/store/confirm";
 
 interface Props {
   promptKey: PromptKey;
@@ -23,9 +24,9 @@ export function PromptEditor({ promptKey, title, description }: Props) {
 
   const handleRestore = async () => {
     if (
-      !window.confirm(
+      !(await confirm(
         `确认将「${title}」恢复为默认模板？\n当前编辑内容将丢失。`
-      )
+      ))
     ) {
       return;
     }

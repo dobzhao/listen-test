@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { RotateCcw } from "lucide-react";
 import { useSettingsStore } from "@/store/settings";
+import { confirm } from "@/store/confirm";
 
 interface TimingField {
   key:
@@ -115,9 +116,9 @@ export function TimingPanel() {
 
   const handleRestore = async () => {
     if (
-      !window.confirm(
+      !(await confirm(
         "确认将所有流程时长恢复为默认值？\n当前编辑将丢失。"
-      )
+      ))
     ) {
       return;
     }

@@ -24,6 +24,7 @@ import {
 import { useResultStore } from "@/store/result";
 import { useTestStore } from "@/store/test";
 import { useTestFlowStore } from "@/store/testFlow";
+import { confirm } from "@/store/confirm";
 import {
   resetTestFlow,
   clearTestSession,
@@ -52,9 +53,9 @@ export default function ResultPage() {
   // 先导航让 ResultPage 卸载，再 reset 状态，useEffect 就不会在旧页面上重跑。
   const handleRetest = async () => {
     if (
-      !window.confirm(
+      !(await confirm(
         "确认清空之前的答题记录并重新作答？\n将清空 1-14 题选项、15-18 题填空与第 19 题录音，但保留题目。"
-      )
+      ))
     ) {
       console.log("[Result] handleRetest: 用户取消");
       return;
@@ -93,9 +94,9 @@ export default function ResultPage() {
   // 同样先 navigate 再 reset，避免重置 result 触发 useEffect 重新评分。
   const handleBackToMenu = async () => {
     if (
-      !window.confirm(
+      !(await confirm(
         "确认返回主菜单？\n将清空当前题目与所有作答（相当于重新打开程序）。"
-      )
+      ))
     ) {
       console.log("[Result] handleBackToMenu: 用户取消");
       return;
