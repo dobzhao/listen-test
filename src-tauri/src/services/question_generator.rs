@@ -244,16 +244,7 @@ fn validate_q1_4(raw: &Q1To4Raw) -> Result<(), String> {
         if d.dialogue.is_empty() {
             return Err(format!("第 {} 段对话为空", i + 1));
         }
-        if !["A", "B", "C"].contains(&d.answer.as_str()) {
-            return Err(format!("第 {} 段对话答案不合法: {}", i + 1, d.answer));
-        }
-        if d.options.len() != 3 {
-            return Err(format!(
-                "第 {} 段对话选项数量应为 3，实际 {}",
-                i + 1,
-                d.options.len()
-            ));
-        }
+        validate_choice_question(&d.options, &d.answer, &format!("第 {} 段对话", i + 1))?;
     }
     Ok(())
 }
@@ -264,6 +255,9 @@ fn validate_q5_14(raw: &Q5To14Raw) -> Result<(), String> {
         return Err(format!("期望 4 段长对话，实际 {} 段", raw.dialogues.len()));
     }
     for (i, d) in raw.dialogues.iter().enumerate() {
+        if d.dialogue.is_empty() {
+            return Err(format!("第 {} 段长对话内容为空", i + 1));
+        }
         if d.questions.len() != 2 {
             return Err(format!(
                 "第 {} 段长对话应配 2 题，实际 {} 题",
@@ -271,11 +265,39 @@ fn validate_q5_14(raw: &Q5To14Raw) -> Result<(), String> {
                 d.questions.len()
             ));
         }
+        for (j, q) in d.questions.iter().enumerate() {
+            validate_choice_question(&q.options, &q.answer, &format!("第 {} 段长对话第 {} 题", i + 1, j + 1))?;
+        }
+    }
+    if raw.monologue.text.trim().is_empty() {
+        return Err("独白文本为空".to_string());
     }
     if raw.monologue.questions.len() != 2 {
         return Err(format!(
             "独白应配 2 题，实际 {} 题",
             raw.monologue.questions.len()
+        ));
+    }
+    for (j, q) in raw.monologue.questions.iter().enumerate() {
+        validate_choice_question(&q.options, &q.answer, &format!("独白第 {} 题", j + 1))?;
+    }
+    Ok(())
+}
+
+/// 校验单道选择题：答案 ∈ {A,B,C} 且选项数 = 3
+fn validate_choice_question(
+    options: &HashMap<String, String>,
+    answer: &str,
+    label: &str,
+) -> Result<(), String> {
+    if !["A", "B", "C"].contains(&answer) {
+        return Err(format!("{} 答案不合法: {}", label, answer));
+    }
+    if options.len() != 3 {
+        return Err(format!(
+            "{} 选项数量应为 3，实际 {}",
+            label,
+            options.len()
         ));
     }
     Ok(())
