@@ -49,6 +49,55 @@ export interface TimingConfig {
   retell_recall_prep_ms: number;
 }
 
+/**
+ * 题目难度档位（与 Rust `models::config::DifficultyDemand` 字段一一对应）。
+ * 字段名对应 prompt 模板中的
+ *   `{{DIFFICULTY_DEMAND_1_4}}` / `{{DIFFICULTY_DEMAND_5_14}}` / `{{DIFFICULTY_DEMAND_15_18}}`。
+ */
+export interface DifficultyDemand {
+  demand_1_4: string;
+  demand_5_14: string;
+  demand_15_18: string;
+}
+
+export type DifficultyLevel = "junior_high" | "senior_high" | "undergraduate";
+export type DifficultyDemandKey = "demand_1_4" | "demand_5_14" | "demand_15_18";
+
+/**
+ * 难度配置：当前选中档 + 三档文字。
+ * 与 Rust `models::config::DifficultyConfig` 字段一一对应。
+ */
+export interface DifficultyConfig {
+  level: DifficultyLevel;
+  junior_high: DifficultyDemand;
+  senior_high: DifficultyDemand;
+  undergraduate: DifficultyDemand;
+}
+
+export const DIFFICULTY_LEVELS: DifficultyLevel[] = [
+  "junior_high",
+  "senior_high",
+  "undergraduate",
+];
+
+export const DIFFICULTY_LEVEL_LABELS: Record<DifficultyLevel, string> = {
+  junior_high: "初中（Junior High）",
+  senior_high: "高中（Senior High）",
+  undergraduate: "大学（Undergraduate）",
+};
+
+export const DIFFICULTY_DEMAND_KEYS: DifficultyDemandKey[] = [
+  "demand_1_4",
+  "demand_5_14",
+  "demand_15_18",
+];
+
+export const DIFFICULTY_DEMAND_LABELS: Record<DifficultyDemandKey, string> = {
+  demand_1_4: "1-4 题对话难度要求",
+  demand_5_14: "5-14 题对话/独白难度要求",
+  demand_15_18: "15-18 题独白难度要求",
+};
+
 export interface AppConfig {
   llm: ModelConfig;
   tts: ModelConfig;
@@ -57,6 +106,7 @@ export interface AppConfig {
   prompts: PromptConfig;
   audio: AudioConfig;
   timing: TimingConfig;
+  difficulty: DifficultyConfig;
 }
 
 export interface ConfigResponse {
@@ -155,6 +205,40 @@ export function defaultAppConfig(): AppConfig {
       retell_pause_ms: 3000,
       retell_fill_blank_ms: 90000,
       retell_recall_prep_ms: 120000,
+    },
+    difficulty: defaultDifficultyConfig(),
+  };
+}
+
+/**
+ * 三档难度默认文字（与 Rust `models::config::default_difficulty_demands()` 一字一致）。
+ */
+export function defaultDifficultyConfig(): DifficultyConfig {
+  return {
+    level: "junior_high",
+    junior_high: {
+      demand_1_4:
+        "对话时M和W每人最多说两次话，对话时不要使用从句和虚拟语气，只能使用简单句。",
+      demand_5_14:
+        "对话时M和W每人说四次话，独白平均句长控制在8个单词左右。对话/独白不要使用从句和虚拟语气，只能使用简单句。",
+      demand_15_18:
+        "独白平均句长控制在8个单词左右，独白不要使用从句和虚拟语气，只能使用简单句。",
+    },
+    senior_high: {
+      demand_1_4:
+        "对话时M和W每人最多说三次话，对话时可以使用从句和虚拟语气，但从句不要嵌套使用。",
+      demand_5_14:
+        "对话时M和W每人说五次话，独白平均句长控制在12个单词左右。对话/独白可以使用从句和虚拟语气，但从句不要嵌套使用。",
+      demand_15_18:
+        "独白平均句长控制在12个单词左右，独白可以使用从句和虚拟语气，但从句不要嵌套使用。",
+    },
+    undergraduate: {
+      demand_1_4:
+        "对话时M和W每人最多说三次话，对话时可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。",
+      demand_5_14:
+        "对话时M和W每人说六次话，独白平均句长控制在16个单词左右。对话/独白可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。",
+      demand_15_18:
+        "独白平均句长控制在16个单词左右，独白可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。",
     },
   };
 }

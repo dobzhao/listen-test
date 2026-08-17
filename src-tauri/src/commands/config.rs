@@ -1,6 +1,9 @@
 //! 配置读写相关 Tauri commands
 
-use crate::models::config::{default_prompts, AppConfig, TimingConfig};
+use crate::models::config::{
+    default_difficulty_demands, default_prompts, AppConfig, DifficultyConfig, DifficultyDemand,
+    TimingConfig,
+};
 use crate::utils::path::config_file;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -147,6 +150,54 @@ pub fn restore_default_prompt(args: RestorePromptArgs) -> Result<String, String>
 #[tauri::command]
 pub fn restore_default_timing() -> Result<TimingConfig, String> {
     Ok(TimingConfig::default())
+}
+
+// ===== 难度（difficulty）相关 =====
+
+/// 单个难度文字恢复（细粒度，对齐 `restore_default_prompt` 的形态）
+#[derive(Debug, Deserialize)]
+pub struct RestoreDifficultyDemandArgs {
+    /// "junior_high" | "senior_high" | "undergraduate"
+    pub level: String,
+    /// "demand_1_4" | "demand_5_14" | "demand_15_18"
+    pub key: String,
+}
+
+#[tauri::command]
+pub fn restore_default_difficulty_demand(
+    args: RestoreDifficultyDemandArgs,
+) -> Result<String, String> {
+    let defaults = default_difficulty_demands();
+    let demand = match args.level.as_str() {
+        "junior_high" => &defaults.junior_high,
+        "senior_high" => &defaults.senior_high,
+        "undergraduate" => &defaults.undergraduate,
+        other => return Err(format!("未知难度档: {other}")),
+    };
+    Ok(match args.key.as_str() {
+        "demand_1_4" => demand.demand_1_4.clone(),
+        "demand_5_14" => demand.demand_5_14.clone(),
+        "demand_15_18" => demand.demand_15_18.clone(),
+        other => return Err(format!("未知 demand key: {other}")),
+    })
+}
+
+/// 恢复整档（3 段文字一次性还原）
+#[tauri::command]
+pub fn restore_default_difficulty_level(level: String) -> Result<DifficultyDemand, String> {
+    let defaults = default_difficulty_demands();
+    Ok(match level.as_str() {
+        "junior_high" => defaults.junior_high,
+        "senior_high" => defaults.senior_high,
+        "undergraduate" => defaults.undergraduate,
+        other => return Err(format!("未知难度档: {other}")),
+    })
+}
+
+/// 恢复全部（level + 三档文字一起还原）
+#[tauri::command]
+pub fn restore_default_difficulty() -> Result<DifficultyConfig, String> {
+    Ok(DifficultyConfig::default())
 }
 
 /// 打开配置文件所在目录（调试用）

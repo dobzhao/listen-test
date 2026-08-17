@@ -22,6 +22,7 @@ import { LlmParamsPanel } from "@/components/settings/LlmParamsPanel";
 import { MicTest } from "@/components/settings/MicTest";
 import { KeyboardTest } from "@/components/settings/KeyboardTest";
 import { TimingPanel } from "@/components/settings/TimingPanel";
+import { DifficultyPanel } from "@/components/settings/DifficultyPanel";
 import {
   DEFAULT_LLM_API_PATH,
   DEFAULT_TTS_API_PATH,
@@ -114,11 +115,12 @@ export default function SettingsPage() {
 
       <main className="container max-w-5xl mx-auto py-6">
         <Tabs defaultValue="llm" className="space-y-4">
-          <TabsList className="grid grid-cols-3 md:grid-cols-7 w-full">
+          <TabsList className="grid grid-cols-3 md:grid-cols-8 w-full">
             <TabsTrigger value="llm">LLM</TabsTrigger>
             <TabsTrigger value="tts">TTS</TabsTrigger>
             <TabsTrigger value="stt">STT</TabsTrigger>
             <TabsTrigger value="prompts">提示词</TabsTrigger>
+            <TabsTrigger value="difficulty">题目难度</TabsTrigger>
             <TabsTrigger value="audio">音频</TabsTrigger>
             <TabsTrigger value="timing">流程时长</TabsTrigger>
             <TabsTrigger value="device">设备测试</TabsTrigger>
@@ -227,6 +229,11 @@ export default function SettingsPage() {
                 修改提示词后请点击右上角「保存配置」按钮。
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* 题目难度 */}
+          <TabsContent value="difficulty" className="space-y-4">
+            <DifficultyPanel />
           </TabsContent>
 
           {/* 音频设置 */}

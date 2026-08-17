@@ -78,13 +78,13 @@
 peiyuan/
 ├── src/                              # 前端 React + TS
 │   ├── components/
-│   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog（全局确认弹窗，见 §4.4.15）
-│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / GenerationPreview / LlmParamsPanel / TimingPanel
+│   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog
+│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / GenerationPreview / LlmParamsPanel / TimingPanel / DifficultyPanel
 │   │   ├── test/                     # GlobalHeader / PhaseCountdown / QuestionDisplay / FillBlankTable / RecorderPanel
 │   │   ├── ErrorBoundary.tsx
 │   │   └── Toast.tsx
 │   ├── pages/                         # MainMenu / Settings / Test / Result
-│   ├── store/                         # Zustand: settings / test / testFlow / result / confirm（全局确认对话框，见 §4.4.15）
+│   ├── store/                         # Zustand: settings / test / testFlow / result / confirm
 │   ├── hooks/                         # useTimerEvent / useAudioPlayer / useRecorder / useGenerationProgress / useTestFlowEvents
 │   ├── types/                         # TypeScript 类型（与 Rust models/ 对齐）
 │   ├── lib/                           # tauri invoke 封装 + utils

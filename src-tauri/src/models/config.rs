@@ -205,6 +205,11 @@ pub struct AppConfig {
     pub prompts: PromptConfig,
     pub audio: AudioConfig,
     pub timing: TimingConfig,
+    /// 题目难度配置：当前选中档 + 三档 prompt 文字
+    ///
+    /// 缺字段时回退 `DifficultyConfig::default()`，旧配置文件无需迁移。
+    #[serde(default)]
+    pub difficulty: DifficultyConfig,
 }
 
 impl AppConfig {
@@ -246,6 +251,7 @@ impl Default for AppConfig {
             prompts: default_prompts(),
             audio: AudioConfig::default(),
             timing: TimingConfig::default(),
+            difficulty: DifficultyConfig::default(),
         }
     }
 }
@@ -261,5 +267,95 @@ pub fn default_prompts() -> PromptConfig {
         q15_18: include_str!("../../prompts/q15_18.txt").to_string(),
         q15_18_scoring: include_str!("../../prompts/q15_18_scoring.txt").to_string(),
         q19_scoring: include_str!("../../prompts/q19_scoring.txt").to_string(),
+    }
+}
+
+/// 单个难度档下三个 prompt 占位符对应文字
+///
+/// 字段名对应 prompt 模板中的 `{{DIFFICULTY_DEMAND_1_4}}` /
+/// `{{DIFFICULTY_DEMAND_5_14}}` / `{{DIFFICULTY_DEMAND_15_18}}`。
+/// `#[serde(default)]` 让旧配置文件缺字段时回退空字符串。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DifficultyDemand {
+    #[serde(default)]
+    pub demand_1_4: String,
+    #[serde(default)]
+    pub demand_5_14: String,
+    #[serde(default)]
+    pub demand_15_18: String,
+}
+
+impl Default for DifficultyDemand {
+    fn default() -> Self {
+        Self {
+            demand_1_4: String::new(),
+            demand_5_14: String::new(),
+            demand_15_18: String::new(),
+        }
+    }
+}
+
+/// 难度配置：当前选中档 + 三档文字
+///
+/// `level` 取值 `"junior_high" | "senior_high" | "undergraduate"`。
+/// 出题时根据 `level` 选择对应档位的 `demand_*` 文字注入 prompt。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DifficultyConfig {
+    #[serde(default = "default_difficulty_level")]
+    pub level: String,
+    #[serde(default)]
+    pub junior_high: DifficultyDemand,
+    #[serde(default)]
+    pub senior_high: DifficultyDemand,
+    #[serde(default)]
+    pub undergraduate: DifficultyDemand,
+}
+
+fn default_difficulty_level() -> String {
+    "junior_high".to_string()
+}
+
+impl Default for DifficultyConfig {
+    fn default() -> Self {
+        let defaults = default_difficulty_demands();
+        Self {
+            level: default_difficulty_level(),
+            junior_high: defaults.junior_high,
+            senior_high: defaults.senior_high,
+            undergraduate: defaults.undergraduate,
+        }
+    }
+}
+
+/// 三档难度的默认文字模板（与前端 `defaultAppConfig().difficulty` 保持一字一致）
+///
+/// 文字体量小、不含占位符、不需多语言，直接硬编码而非 `include_str!`。
+pub fn default_difficulty_demands() -> DifficultyConfig {
+    DifficultyConfig {
+        level: default_difficulty_level(),
+        junior_high: DifficultyDemand {
+            demand_1_4: "对话时M和W每人最多说两次话，对话时不要使用从句和虚拟语气，只能使用简单句。"
+                .to_string(),
+            demand_5_14: "对话时M和W每人说四次话，独白平均句长控制在8个单词左右。对话/独白不要使用从句和虚拟语气，只能使用简单句。"
+                .to_string(),
+            demand_15_18: "独白平均句长控制在8个单词左右，独白不要使用从句和虚拟语气，只能使用简单句。"
+                .to_string(),
+        },
+        senior_high: DifficultyDemand {
+            demand_1_4: "对话时M和W每人最多说三次话，对话时可以使用从句和虚拟语气，但从句不要嵌套使用。"
+                .to_string(),
+            demand_5_14: "对话时M和W每人说五次话，独白平均句长控制在12个单词左右。对话/独白可以使用从句和虚拟语气，但从句不要嵌套使用。"
+                .to_string(),
+            demand_15_18: "独白平均句长控制在12个单词左右，独白可以使用从句和虚拟语气，但从句不要嵌套使用。"
+                .to_string(),
+        },
+        undergraduate: DifficultyDemand {
+            demand_1_4: "对话时M和W每人最多说三次话，对话时可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。"
+                .to_string(),
+            demand_5_14: "对话时M和W每人说六次话，独白平均句长控制在16个单词左右。对话/独白可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。"
+                .to_string(),
+            demand_15_18: "独白平均句长控制在16个单词左右，独白可以符合语法地任意使用从句和虚拟语气，可适当出现一些专业领域术语，但不要刻意堆砌复杂语法导致影响对话自然度。"
+                .to_string(),
+        },
     }
 }

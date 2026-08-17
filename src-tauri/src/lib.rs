@@ -79,6 +79,9 @@ pub fn run() {
             commands::config::reset_config,
             commands::config::restore_default_prompt,
             commands::config::restore_default_timing,
+            commands::config::restore_default_difficulty_demand,
+            commands::config::restore_default_difficulty_level,
+            commands::config::restore_default_difficulty,
             commands::config::open_config_dir,
             // 模型连接测试
             commands::llm::test_llm_connection,

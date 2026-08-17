@@ -5,7 +5,9 @@
 //! - `q5_14`：4 段长对话 + 1 段独白，每段/每独白配 2 题
 //! - `q15_18`：1 段较长听力材料 + 总-分表格 + 4 个挖空
 
-use crate::models::config::{AppConfig, LlmParams, ModelConfig, PromptConfig};
+use crate::models::config::{
+    AppConfig, DifficultyConfig, DifficultyDemand, LlmParams, ModelConfig, PromptConfig,
+};
 use crate::models::question::{
     LongDialogue, Monologue, MultipleChoiceQuestion, RetellMaterial, ShortDialogue,
 };
@@ -103,9 +105,11 @@ pub async fn generate_q1_4(
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
+    difficulty: &DifficultyConfig,
 ) -> Result<Vec<ShortDialogue>, GenError> {
     let mut vars = HashMap::new();
     vars.insert("QUESTION_COUNT", "4");
+    inject_difficulty_vars(&mut vars, difficulty);
     let prompt = render(&prompts.q1_4, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {
@@ -147,8 +151,10 @@ pub async fn generate_q5_14(
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
+    difficulty: &DifficultyConfig,
 ) -> Result<(Vec<LongDialogue>, Monologue), GenError> {
-    let vars = HashMap::new();
+    let mut vars = HashMap::new();
+    inject_difficulty_vars(&mut vars, difficulty);
     let prompt = render(&prompts.q5_14, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {
@@ -190,8 +196,10 @@ pub async fn generate_q15_18(
     llm_cfg: &ModelConfig,
     llm_params: &LlmParams,
     prompts: &PromptConfig,
+    difficulty: &DifficultyConfig,
 ) -> Result<RetellMaterial, GenError> {
-    let vars = HashMap::new();
+    let mut vars = HashMap::new();
+    inject_difficulty_vars(&mut vars, difficulty);
     let prompt = render(&prompts.q15_18, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {
@@ -224,6 +232,22 @@ pub async fn generate_q15_18(
 }
 
 // ===== 内部辅助 =====
+
+/// 根据 `difficulty.level` 选择当前激活档的文字，三个 prompt 占位符同时注入
+///
+/// 即使某些 prompt 只用到其中一个 demand_*，三个 key 都注入也不影响渲染
+/// （`render` 函数会忽略 vars 中未被模板引用的 key）。
+/// 未知 level 或缺字段时兜底到 `junior_high`，避免运行时 panic。
+fn inject_difficulty_vars<'a>(vars: &mut HashMap<&'a str, &'a str>, difficulty: &'a DifficultyConfig) {
+    let demand: &DifficultyDemand = match difficulty.level.as_str() {
+        "senior_high" => &difficulty.senior_high,
+        "undergraduate" => &difficulty.undergraduate,
+        _ => &difficulty.junior_high,
+    };
+    vars.insert("DIFFICULTY_DEMAND_1_4", demand.demand_1_4.as_str());
+    vars.insert("DIFFICULTY_DEMAND_5_14", demand.demand_5_14.as_str());
+    vars.insert("DIFFICULTY_DEMAND_15_18", demand.demand_15_18.as_str());
+}
 
 /// 解析 LLM 输出 + 自定义校验
 fn parse_with_validation<T>(text: &str, validate: fn(&T) -> Result<(), String>) -> Result<T, GenError>
@@ -507,6 +531,7 @@ pub async fn generate_all_for_test(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
 
@@ -516,6 +541,7 @@ pub async fn generate_all_for_test(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
 
@@ -525,6 +551,7 @@ pub async fn generate_all_for_test(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
 

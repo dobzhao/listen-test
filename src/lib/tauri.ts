@@ -2,7 +2,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppConfig, ConfigResponse, TimingConfig } from "@/types/config";
+import type {
+  AppConfig,
+  ConfigResponse,
+  DifficultyConfig,
+  DifficultyDemand,
+  DifficultyLevel,
+  DifficultyDemandKey,
+  TimingConfig,
+} from "@/types/config";
 import type { TestSession } from "@/types/question";
 
 // ===== 配置相关 =====
@@ -25,6 +33,32 @@ export async function restoreDefaultPrompt(key: string): Promise<string> {
 
 export async function restoreDefaultTiming(): Promise<TimingConfig> {
   return invoke<TimingConfig>("restore_default_timing");
+}
+
+/**
+ * 恢复单个难度文字（细粒度）。
+ * `level` 取 `junior_high | senior_high | undergraduate`，
+ * `key` 取 `demand_1_4 | demand_5_14 | demand_15_18`。
+ */
+export async function restoreDefaultDifficultyDemand(
+  level: DifficultyLevel,
+  key: DifficultyDemandKey
+): Promise<string> {
+  return invoke<string>("restore_default_difficulty_demand", {
+    args: { level, key },
+  });
+}
+
+/** 恢复整档难度（3 段文字一次性还原）。 */
+export async function restoreDefaultDifficultyLevel(
+  level: DifficultyLevel
+): Promise<DifficultyDemand> {
+  return invoke<DifficultyDemand>("restore_default_difficulty_level", { level });
+}
+
+/** 恢复全部难度（level + 三档文字一起还原）。 */
+export async function restoreDefaultDifficulty(): Promise<DifficultyConfig> {
+  return invoke<DifficultyConfig>("restore_default_difficulty");
 }
 
 export async function openConfigDir(): Promise<string> {

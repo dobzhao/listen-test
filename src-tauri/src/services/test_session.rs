@@ -67,6 +67,7 @@ pub async fn generate_full_session(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
     info!("1-4 题生成完成，共 {} 段", short_dialogues.len());
@@ -78,6 +79,7 @@ pub async fn generate_full_session(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
     info!(
@@ -92,6 +94,7 @@ pub async fn generate_full_session(
         &config.llm,
         &config.llm_params,
         &config.prompts,
+        &config.difficulty,
     )
     .await?;
     info!("15-18 题生成完成");

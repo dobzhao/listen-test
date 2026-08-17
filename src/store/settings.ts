@@ -4,6 +4,8 @@ import { create } from "zustand";
 import {
   AppConfig,
   ConfigResponse,
+  DifficultyDemandKey,
+  DifficultyLevel,
   PromptKey,
   TimingConfig,
   defaultAppConfig,
@@ -12,6 +14,9 @@ import {
   getConfig,
   saveConfig,
   resetConfig,
+  restoreDefaultDifficulty,
+  restoreDefaultDifficultyDemand,
+  restoreDefaultDifficultyLevel,
   restoreDefaultPrompt,
   restoreDefaultTiming,
 } from "@/lib/tauri";
@@ -36,6 +41,19 @@ interface SettingsState {
   updatePrompt: (key: PromptKey, value: string) => void;
   restoreOnePrompt: (key: PromptKey) => Promise<void>;
   restoreDefaultTiming: () => Promise<void>;
+  // 难度配置（命名对齐 `updatePrompt` / `restoreOnePrompt` 模式）
+  setDifficultyLevel: (level: DifficultyLevel) => void;
+  updateDifficultyDemand: (
+    level: DifficultyLevel,
+    key: DifficultyDemandKey,
+    value: string
+  ) => void;
+  restoreOneDifficultyDemand: (
+    level: DifficultyLevel,
+    key: DifficultyDemandKey
+  ) => Promise<void>;
+  restoreOneDifficultyLevel: (level: DifficultyLevel) => Promise<void>;
+  restoreDefaultDifficulty: () => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -103,5 +121,38 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   restoreDefaultTiming: async () => {
     const fresh = await restoreDefaultTiming();
     get().updateTiming(fresh);
+  },
+
+  setDifficultyLevel: (level) =>
+    set((s) => ({
+      config: { ...s.config, difficulty: { ...s.config.difficulty, level } },
+    })),
+
+  updateDifficultyDemand: (level, key, value) =>
+    set((s) => ({
+      config: {
+        ...s.config,
+        difficulty: {
+          ...s.config.difficulty,
+          [level]: { ...s.config.difficulty[level], [key]: value },
+        },
+      },
+    })),
+
+  restoreOneDifficultyDemand: async (level, key) => {
+    const value = await restoreDefaultDifficultyDemand(level, key);
+    get().updateDifficultyDemand(level, key, value);
+  },
+
+  restoreOneDifficultyLevel: async (level) => {
+    const fresh = await restoreDefaultDifficultyLevel(level);
+    set((s) => ({
+      config: { ...s.config, difficulty: { ...s.config.difficulty, [level]: fresh } },
+    }));
+  },
+
+  restoreDefaultDifficulty: async () => {
+    const fresh = await restoreDefaultDifficulty();
+    set((s) => ({ config: { ...s.config, difficulty: fresh } }));
   },
 }));
