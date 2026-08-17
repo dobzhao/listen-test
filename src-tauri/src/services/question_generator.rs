@@ -13,6 +13,9 @@ use crate::models::question::{
 };
 use crate::services::llm_service::{call_llm, LlmError};
 use crate::services::prompt_engine_service::render;
+use crate::services::scenario_picker::{
+    pick_dialogue_scenarios_json, pick_monologue_scenario_json,
+};
 use crate::utils::json_extract::try_parse;
 use crate::utils::retry::{retry_async, RetryConfig};
 use serde::{Deserialize, Serialize};
@@ -108,8 +111,9 @@ pub async fn generate_q1_4(
     difficulty: &DifficultyConfig,
 ) -> Result<Vec<ShortDialogue>, GenError> {
     let mut vars = HashMap::new();
-    vars.insert("QUESTION_COUNT", "4");
     inject_difficulty_vars(&mut vars, difficulty);
+    let dialogue_json = pick_dialogue_scenarios_json(&difficulty.level);
+    vars.insert("DIALOGUE_SCENARIOS", &dialogue_json);
     let prompt = render(&prompts.q1_4, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {
@@ -155,6 +159,10 @@ pub async fn generate_q5_14(
 ) -> Result<(Vec<LongDialogue>, Monologue), GenError> {
     let mut vars = HashMap::new();
     inject_difficulty_vars(&mut vars, difficulty);
+    let dialogue_json = pick_dialogue_scenarios_json(&difficulty.level);
+    vars.insert("DIALOGUE_SCENARIOS", &dialogue_json);
+    let monologue_json = pick_monologue_scenario_json(&difficulty.level);
+    vars.insert("MONOLOGUE_SCENARIO", &monologue_json);
     let prompt = render(&prompts.q5_14, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {
@@ -200,6 +208,8 @@ pub async fn generate_q15_18(
 ) -> Result<RetellMaterial, GenError> {
     let mut vars = HashMap::new();
     inject_difficulty_vars(&mut vars, difficulty);
+    let monologue_json = pick_monologue_scenario_json(&difficulty.level);
+    vars.insert("MONOLOGUE_SCENARIO", &monologue_json);
     let prompt = render(&prompts.q15_18, &vars).map_err(|e| GenError::Prompt(e.to_string()))?;
 
     let retry = RetryConfig {

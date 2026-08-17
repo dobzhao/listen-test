@@ -11,6 +11,7 @@ pub mod llm_service;
 pub mod prompt_engine_service;
 pub mod question_generator;
 pub mod recorder;
+pub mod scenario_picker;
 pub mod scoring;
 pub mod stt_service;
 pub mod test_flow;

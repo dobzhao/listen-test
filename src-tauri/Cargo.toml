@@ -67,6 +67,9 @@ once_cell = "1"
 # Base64（音频内嵌备用）
 base64 = "0.22"
 
+# 随机采样（场景占位符抽取）
+fastrand = "2"
+
 [features]
 # 默认 Tauri 自定义协议
 custom-protocol = ["tauri/custom-protocol"]
