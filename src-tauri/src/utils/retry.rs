@@ -2,6 +2,7 @@
 //!
 //! 用于 LLM/TTS/STT 调用失败时的自动重试机制。
 
+use std::fmt::Display;
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -41,6 +42,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
     P: Fn(&E) -> bool,
+    E: Display,
 {
     let mut delay = config.initial_delay_ms;
     let mut last_err: Option<E> = None;
@@ -56,10 +58,10 @@ where
             Err(e) => {
                 let retryable = should_retry(&e);
                 if !retryable || attempt == config.max_retries {
-                    warn!(op = op_name, attempt, "最终失败，停止重试");
+                    warn!(op = op_name, attempt, error = %e, "最终失败，停止重试");
                     return Err(e);
                 }
-                warn!(op = op_name, attempt, "操作失败，{}ms 后重试", delay);
+                warn!(op = op_name, attempt, error = %e, "操作失败，{}ms 后重试", delay);
                 last_err = Some(e);
                 tokio::time::sleep(Duration::from_millis(delay)).await;
                 delay = ((delay as f64) * config.backoff_factor) as u64;
