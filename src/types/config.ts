@@ -130,16 +130,26 @@ export const PROMPT_KEY_LABELS: Record<PromptKey, string> = {
 };
 
 export const PROMPT_PLACEHOLDERS: Record<PromptKey, Array<{ key: string; desc: string }>> = {
-  q1_4: [{ key: "QUESTION_COUNT", desc: "生成题目数量（固定 4）" }],
-  q5_14: [],
-  q15_18: [],
+  q1_4: [
+    { key: "DIALOGUE_SCENARIOS", desc: "4 段短对话的场景清单（运行时随机抽取）" },
+    { key: "DIFFICULTY_DEMAND_1_4", desc: "当前档位 1-4 题难度文字要求（在难度 Tab 编辑）" },
+  ],
+  q5_14: [
+    { key: "DIALOGUE_SCENARIOS", desc: "4 段长对话的场景清单（运行时随机抽取）" },
+    { key: "MONOLOGUE_SCENARIO", desc: "1 段独白的话题与展开方向（运行时随机抽取）" },
+    { key: "DIFFICULTY_DEMAND_5_14", desc: "当前档位 5-14 题难度文字要求（在难度 Tab 编辑）" },
+  ],
+  q15_18: [
+    { key: "MONOLOGUE_SCENARIO", desc: "较长听力材料的话题与 3 个展开方向（运行时随机抽取）" },
+    { key: "DIFFICULTY_DEMAND_15_18", desc: "当前档位 15-18 题难度文字要求（在难度 Tab 编辑）" },
+  ],
   q15_18_scoring: [
-    { key: "ORIGINAL_TEXT", desc: "15-19 题听力材料原文" },
-    { key: "ANSWERS", desc: "用户填写的 4 个答案（JSON 字符串）" },
+    { key: "ORIGINAL_TEXT", desc: "15-19 题听力材料原文 + 4 空标准答案" },
+    { key: "ANSWERS", desc: "用户填写的 4 空答案（pretty JSON 字符串）" },
   ],
   q19_scoring: [
     { key: "ORIGINAL_TEXT", desc: "15-19 题听力材料原文" },
-    { key: "STT_RESULT", desc: "用户第 19 题录音经 STT 转写后的文本" },
+    { key: "STT_RESULT", desc: "第 19 题录音经 STT 转写后的文本" },
   ],
 };
 

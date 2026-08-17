@@ -71,8 +71,7 @@
 
 **题目结构**：4 段短对话，每段配 1 道选择题。
 
-**生成 Prompt 模板**：默认见 `src-tauri/prompts/q1_4.txt`，占位符：
-- `{{QUESTION_COUNT}}`（固定为 4）
+**生成 Prompt 模板**：默认见 `src-tauri/prompts/q1_4.txt`；占位符详见第五章 5.2 占位符总表。
 
 **每题流程**：
 
@@ -211,17 +210,50 @@ Form-data: file=audio.wav, model=..., language=en
 
 ## 五、Prompt 模板
 
-5 个 Prompt 模板均可在设置界面编辑，使用 `{{KEY}}` 占位符语法：
+19 道题的题目生成与评分全部由 LLM 完成，共 5 个 Prompt 模板，均可在设置界面编辑并支持"恢复默认"。
 
-| Key | 占位符 | 说明 |
-|-----|--------|------|
-| q1_4 | `{{QUESTION_COUNT}}` | 题目数量 |
-| q5_14 | 无 | - |
-| q15_18 | 无 | - |
-| q15_18_scoring | `{{ORIGINAL_TEXT}}`, `{{ANSWERS}}` | 听力原文 + 用户答案 |
-| q19_scoring | `{{ORIGINAL_TEXT}}`, `{{STT_RESULT}}` | 听力原文 + STT 转写文本 |
+### 5.1 模板清单与位置
 
-每个 Prompt 都有"恢复默认"按钮。
+5 个模板以纯文本形式存放于 `src-tauri/prompts/`，编译期由 `include_str!` 嵌入二进制，作为 `PromptConfig` 的默认值（`models::config::default_prompts()`）：
+
+| 模板 Key | 文件 | 行数 | 适用阶段 |
+|----------|------|------|----------|
+| `q1_4` | `q1_4.txt` | 40 | 1-4 题出题（短对话）|
+| `q5_14` | `q5_14.txt` | 86 | 5-14 题出题（长对话 + 独白）|
+| `q15_18` | `q15_18.txt` | 48 | 15-19 题出题（长文本 + 表格 + 挖空）|
+| `q15_18_scoring` | `q15_18_scoring.txt` | 35 | 15-18 题填空判分 |
+| `q19_scoring` | `q19_scoring.txt` | 21 | 19 题口头转述评分 |
+
+### 5.2 占位符总表
+
+10 个占位符全部采用 `{{KEY}}` 语法。下表按"模板 → KEY"列出每条占位符的用途、值来源与是否可被用户在设置界面编辑。
+
+| 模板 | 占位符 KEY | 用途 | 值来源 | 用户可编辑 |
+|------|------------|------|--------|------------|
+| `q1_4` | `{{DIALOGUE_SCENARIOS}}` | 4 段短对话的场景清单 | 按当前难度档从内置对话场景库随机抽 4 个不重复 | 否 |
+| `q1_4` | `{{DIFFICULTY_DEMAND_1_4}}` | 当前档位 1-4 题难度文字要求 | `DifficultyConfig.{level}.demand_1_4` | 是（难度 Tab）|
+| `q5_14` | `{{DIALOGUE_SCENARIOS}}` | 4 段长对话的场景清单 | 同 `q1_4` | 否 |
+| `q5_14` | `{{MONOLOGUE_SCENARIO}}` | 1 段独白的话题与展开方向 | 按当前难度档从独白场景库随机抽 1 个 | 否 |
+| `q5_14` | `{{DIFFICULTY_DEMAND_5_14}}` | 当前档位 5-14 题难度文字要求 | `DifficultyConfig.{level}.demand_5_14` | 是（难度 Tab）|
+| `q15_18` | `{{MONOLOGUE_SCENARIO}}` | 较长听力材料的话题与 3 个展开方向 | 同 `q5_14` | 否 |
+| `q15_18` | `{{DIFFICULTY_DEMAND_15_18}}` | 当前档位 15-18 题难度文字要求 | `DifficultyConfig.{level}.demand_15_18` | 是（难度 Tab）|
+| `q15_18_scoring` | `{{ORIGINAL_TEXT}}` | 15-19 题听力原文 + 4 空标准答案 | 运行时拼接：原文 + 标准答案 | 否 |
+| `q15_18_scoring` | `{{ANSWERS}}` | 用户填写的 4 空答案 | `{"15":..,"16":..,"17":..,"18":..}` pretty JSON | 否 |
+| `q19_scoring` | `{{ORIGINAL_TEXT}}` | 15-19 题听力原文 | `session.retell.passage` | 否 |
+| `q19_scoring` | `{{STT_RESULT}}` | 第 19 题录音经 STT 转写后的文本 | STT 服务返回的转写文本 | 否 |
+
+
+### 5.3 与场景/难度的协同
+
+- 难度档位（`junior_high` / `senior_high` / `undergraduate`）由用户在"难度"Tab 顶部切换
+- 场景库（`src-tauri/resources/dialogue_scenarios.json`、`monologue_scenarios.json`）按 3 档分组；调用方传 `level` 即可拿到对应子池的随机条目
+- `inject_difficulty_vars`（`services/question_generator.rs`）按当前 `level` 取出对应的 3 段 `demand_*` 文字，一次性注入 3 个 KEY，未知 level 兜底为 `junior_high`
+- 由于引擎忽略未引用 KEY，3 个 `DIFFICULTY_DEMAND_*` 同时注入是安全的
+
+
+### 5.4 "恢复默认"按钮
+
+设置界面每个 Prompt 模板都有"恢复默认"按钮，点击后将对应模板重置为 `src-tauri/prompts/<key>.txt` 编译期默认值，**仅影响该模板，不影响其他模板或难度/场景配置**。
 
 ---
 

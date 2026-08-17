@@ -180,7 +180,11 @@ export default function SettingsPage() {
                   <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
                     prompt_engine
                   </code>{" "}
-                  替换为实际变量值。
+                  替换为实际变量值。3 个{" "}
+                  <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs">
+                    {"{{DIFFICULTY_DEMAND_*}}"}
+                  </code>{" "}
+                  占位符的取值在「题目难度」Tab 中编辑。
                 </p>
               </CardHeader>
             </Card>

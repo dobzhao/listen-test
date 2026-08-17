@@ -22,7 +22,7 @@ interface Props {
 
 export function GenerationPreview({ promptKey }: Props) {
   const config = useSettingsStore((s) => s.config);
-  const [varsText, setVarsText] = useState("QUESTION_COUNT=4");
+  const [varsText, setVarsText] = useState("");
   const [output, setOutput] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,13 +67,13 @@ export function GenerationPreview({ promptKey }: Props) {
       <CardContent className="space-y-3">
         <div className="space-y-1">
           <Label htmlFor={`vars-${promptKey}`}>
-            占位符变量（每行 KEY=VALUE，如 QUESTION_COUNT=4）
+            占位符变量（每行 KEY=VALUE；空 KEY 由后端自动注入）
           </Label>
           <Input
             id={`vars-${promptKey}`}
             value={varsText}
             onChange={(e) => setVarsText(e.target.value)}
-            placeholder="QUESTION_COUNT=4"
+            placeholder="KEY=VALUE\nKEY=VALUE"
             className="font-mono text-xs"
           />
         </div>
