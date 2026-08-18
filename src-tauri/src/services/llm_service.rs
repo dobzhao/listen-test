@@ -11,6 +11,7 @@ use crate::services::http_client::{auth_headers, ensure_success, HttpError};
 use crate::utils::retry::{retry_async, RetryConfig};
 use eventsource_stream as ess;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -27,20 +28,45 @@ pub enum LlmError {
     EmptyContent,
 }
 
+/// 对话消息（OpenAI Chat Completions 兼容格式）
+///
+/// 角色支持 `"user" | "assistant" | "system"`，用于支持多轮对话：
+/// 出题时若 LLM 返回不合规 JSON 或题目数量错误，调用方可在 messages
+/// 末尾追加 assistant(原始输出) + user(具体错误反馈) 实现多轮修正。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: "user".into(), content: content.into() }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: "assistant".into(), content: content.into() }
+    }
+    #[allow(dead_code)]
+    pub fn system(content: impl Into<String>) -> Self {
+        Self { role: "system".into(), content: content.into() }
+    }
+}
+
 /// LLM 调用返回的完整文本
+///
+/// `messages` 需包含至少一条 user 消息；重试时调用方可在末尾追加
+/// assistant + 用户反馈消息以实现多轮修正。
 pub async fn call_llm(
     client: &reqwest::Client,
     config: &ModelConfig,
     params: &LlmParams,
-    prompt: String,
+    messages: Vec<ChatMessage>,
 ) -> Result<String, LlmError> {
     let url = config.endpoint_url();
 
     let body = json!({
         "model": config.model,
-        "messages": [
-            { "role": "user", "content": prompt }
-        ],
+        "messages": messages,
         "stream": true,
         "stream_options": { "include_usage": true },
         "temperature": params.temperature,
@@ -150,9 +176,7 @@ pub async fn connection_test(
 ) -> Result<(), LlmError> {
     let body = json!({
         "model": config.model,
-        "messages": [
-            { "role": "user", "content": "ping" }
-        ],
+        "messages": vec![ChatMessage::user("ping")],
         "max_tokens": 8,
     });
     let url = config.endpoint_url();

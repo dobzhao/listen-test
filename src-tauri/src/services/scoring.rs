@@ -8,7 +8,7 @@ use crate::models::config::{AppConfig, ModelConfig, PromptConfig};
 use crate::models::question::TestSession;
 use crate::models::result::{BlankResult, McqResult, RetellResult, TestResult};
 use crate::services::http_client::build_client;
-use crate::services::llm_service::{call_llm, LlmError};
+use crate::services::llm_service::{call_llm, ChatMessage, LlmError};
 use crate::services::prompt_engine_service::render;
 use crate::services::stt_service::{transcribe, SttError};
 use crate::utils::json_extract::try_parse;
@@ -157,7 +157,7 @@ pub async fn score_blanks_15_18(
         .map_err(|e| ScoringError::Prompt(e.to_string()))?;
 
     let client = build_client().map_err(|e| ScoringError::HttpClient(e.to_string()))?;
-    let text = call_llm(&client, llm_cfg, llm_params, prompt).await?;
+    let text = call_llm(&client, llm_cfg, llm_params, vec![ChatMessage::user(prompt)]).await?;
 
     info!("15-18 题评分 LLM 返回：{}", text);
 
@@ -295,7 +295,7 @@ pub async fn score_retell_19(
         }
     };
 
-    let text = match call_llm(&client, llm_cfg, llm_params, prompt).await {
+    let text = match call_llm(&client, llm_cfg, llm_params, vec![ChatMessage::user(prompt)]).await {
         Ok(t) => t,
         Err(e) => {
             return RetellResult {

@@ -11,15 +11,16 @@ use crate::models::config::{
 use crate::models::question::{
     LongDialogue, Monologue, MultipleChoiceQuestion, RetellMaterial, ShortDialogue,
 };
-use crate::services::llm_service::{call_llm, LlmError};
+use crate::services::llm_service::{call_llm, ChatMessage, LlmError};
 use crate::services::prompt_engine_service::render;
 use crate::services::scenario_picker::{
     pick_dialogue_scenarios_json, pick_monologue_scenario_json,
 };
 use crate::utils::json_extract::try_parse;
-use crate::utils::retry::{retry_async, RetryConfig};
+use crate::utils::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -125,20 +126,15 @@ pub async fn generate_q1_4(
     let cfg = llm_cfg.clone();
     let params = llm_params.clone();
 
-    let raw: Q1To4Raw = retry_async(
+    let messages = vec![ChatMessage::user(prompt)];
+    let raw: Q1To4Raw = generate_with_feedback(
+        &http,
+        &cfg,
+        &params,
         &retry,
         "generate_q1_4",
-        || {
-            let http = http.clone();
-            let cfg = cfg.clone();
-            let params = params.clone();
-            let prompt = prompt.clone();
-            async move {
-                let text = call_llm(&http, &cfg, &params, prompt).await?;
-                parse_with_validation::<Q1To4Raw>(&text, validate_q1_4)
-            }
-        },
-        |e| matches!(e, GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)),
+        messages,
+        validate_q1_4,
     )
     .await?;
 
@@ -174,20 +170,15 @@ pub async fn generate_q5_14(
     let cfg = llm_cfg.clone();
     let params = llm_params.clone();
 
-    let raw: Q5To14Raw = retry_async(
+    let messages = vec![ChatMessage::user(prompt)];
+    let raw: Q5To14Raw = generate_with_feedback(
+        &http,
+        &cfg,
+        &params,
         &retry,
         "generate_q5_14",
-        || {
-            let http = http.clone();
-            let cfg = cfg.clone();
-            let params = params.clone();
-            let prompt = prompt.clone();
-            async move {
-                let text = call_llm(&http, &cfg, &params, prompt).await?;
-                parse_with_validation::<Q5To14Raw>(&text, validate_q5_14)
-            }
-        },
-        |e| matches!(e, GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)),
+        messages,
+        validate_q5_14,
     )
     .await?;
 
@@ -221,20 +212,15 @@ pub async fn generate_q15_18(
     let cfg = llm_cfg.clone();
     let params = llm_params.clone();
 
-    let raw: Q15To18Raw = retry_async(
+    let messages = vec![ChatMessage::user(prompt)];
+    let raw: Q15To18Raw = generate_with_feedback(
+        &http,
+        &cfg,
+        &params,
         &retry,
         "generate_q15_18",
-        || {
-            let http = http.clone();
-            let cfg = cfg.clone();
-            let params = params.clone();
-            let prompt = prompt.clone();
-            async move {
-                let text = call_llm(&http, &cfg, &params, prompt).await?;
-                parse_with_validation::<Q15To18Raw>(&text, validate_q15_18)
-            }
-        },
-        |e| matches!(e, GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)),
+        messages,
+        validate_q15_18,
     )
     .await?;
 
@@ -260,13 +246,122 @@ fn inject_difficulty_vars<'a>(vars: &mut HashMap<&'a str, &'a str>, difficulty: 
 }
 
 /// 解析 LLM 输出 + 自定义校验
-fn parse_with_validation<T>(text: &str, validate: fn(&T) -> Result<(), String>) -> Result<T, GenError>
+fn parse_with_validation<T, F>(text: &str, validate: F) -> Result<T, GenError>
 where
     T: serde::de::DeserializeOwned,
+    F: FnOnce(&T) -> Result<(), String>,
 {
     let parsed: T = try_parse(text)?;
     validate(&parsed).map_err(GenError::Compliance)?;
     Ok(parsed)
+}
+
+/// 带反馈的多轮调用重试：
+///
+/// - 每次失败时把 assistant(原始 LLM 输出) + user(具体错误反馈) 追加到对话历史，
+///   让 LLM 在同一会话中基于反馈修正，而不是反复独立重新生成。
+/// - 重试次数与退避策略由 `retry` 控制（默认 3 次尝试、500ms 起步 ×2 退避）。
+/// - 仅 `Llm` / `Json` / `Compliance` 三类错误可重试；`Prompt` 等致命错误立即返回。
+async fn generate_with_feedback<T, F>(
+    http: &reqwest::Client,
+    cfg: &ModelConfig,
+    params: &LlmParams,
+    retry: &RetryConfig,
+    op_name: &str,
+    initial_messages: Vec<ChatMessage>,
+    validate: F,
+) -> Result<T, GenError>
+where
+    T: serde::de::DeserializeOwned,
+    F: Fn(&T) -> Result<(), String>,
+{
+    let mut messages = initial_messages;
+    let mut delay = retry.initial_delay_ms;
+    let mut last_err: Option<GenError> = None;
+
+    for attempt in 0..=retry.max_retries {
+        let text = call_llm(http, cfg, params, messages.clone()).await?;
+
+        match parse_with_validation::<T, _>(&text, &validate) {
+            Ok(parsed) => {
+                if attempt > 0 {
+                    info!(op = op_name, attempt, "重试成功");
+                }
+                return Ok(parsed);
+            }
+            Err(e) => {
+                let retryable = matches!(
+                    e,
+                    GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)
+                );
+                if !retryable || attempt == retry.max_retries {
+                    warn!(
+                        op = op_name,
+                        attempt,
+                        error = %e,
+                        "重试耗尽或不可重试，停止"
+                    );
+                    return Err(e);
+                }
+                let feedback = build_feedback_message(&e, &text);
+                messages.push(ChatMessage::assistant(text));
+                messages.push(ChatMessage::user(feedback));
+                last_err = Some(e);
+
+                warn!(op = op_name, attempt, "操作失败，{}ms 后重试", delay);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay = (((delay as f64) * retry.backoff_factor) as u64).min(retry.max_delay_ms);
+            }
+        }
+    }
+
+    Err(last_err.expect("loop guarantees last_err Some"))
+}
+
+/// 构造发给 LLM 的反馈消息（user 角色）
+///
+/// 针对不同错误类型给出针对性指令，让 LLM 知道上次具体错在哪。
+/// 反馈中包含被截断的上次输出（前 1500 字 + 后 500 字），便于 LLM 定位问题；
+/// 同时避免长对话导致 token 爆炸。对 `Llm` 错误（未拿到 LLM 响应）则不附带原文。
+fn build_feedback_message(err: &GenError, prev_output: &str) -> String {
+    match err {
+        GenError::Json(e) => {
+            let truncated = truncate_for_feedback(prev_output, 1500, 500);
+            format!(
+                "你上一次的输出无法被解析为 JSON：{}.\n\n\
+                 你的上一次输出（已截断）：\n```\n{truncated}\n```\n\n\
+                 请严格按要求的 JSON 格式重新输出，**只输出 JSON**，不要包含任何解释性文字、注释或 Markdown 代码块标记。",
+                e
+            )
+        }
+        GenError::Compliance(msg) => {
+            let truncated = truncate_for_feedback(prev_output, 1500, 500);
+            format!(
+                "你的上一次输出不符合要求：{}.\n\n\
+                 你的上一次输出（已截断）：\n```\n{truncated}\n```\n\n\
+                 请根据以上错误信息重新生成，确保完全符合所有要求。",
+                msg
+            )
+        }
+        GenError::Llm(e) => format!(
+            "上一次调用 LLM 出现错误：{}. 请重新生成，注意保持格式严格符合要求。",
+            e
+        ),
+        _ => format!("上一次生成失败：{}. 请重新生成。", err),
+    }
+}
+
+/// 按字符数截断字符串（保留 UTF-8 完整性），保留头尾两段以辅助 LLM 定位
+fn truncate_for_feedback(s: &str, head_chars: usize, tail_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= head_chars + tail_chars {
+        return s.to_string();
+    }
+    let mut head: String = chars.iter().take(head_chars).collect();
+    let tail: String = chars.iter().skip(chars.len() - tail_chars).collect();
+    head.push_str("\n... (已截断中间部分) ...\n");
+    head.push_str(&tail);
+    head
 }
 
 /// 校验 1-4 题结构

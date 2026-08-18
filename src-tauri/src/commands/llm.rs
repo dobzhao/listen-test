@@ -5,7 +5,7 @@
 
 use crate::models::config::{LlmParams, ModelConfig};
 use crate::services::http_client::build_client;
-use crate::services::llm_service::{call_llm, connection_test};
+use crate::services::llm_service::{call_llm, connection_test, ChatMessage};
 use crate::services::prompt_engine_service::render;
 use std::collections::HashMap;
 
@@ -32,7 +32,7 @@ pub async fn generate_with_llm(
         vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let prompt = render(&template, &borrowed)
         .map_err(|e| format!("Prompt 渲染失败: {e}"))?;
-    let text = call_llm(&client, &config, &params, prompt)
+    let text = call_llm(&client, &config, &params, vec![ChatMessage::user(prompt)])
         .await
         .map_err(|e| format!("LLM 调用失败: {e}"))?;
     Ok(text)
