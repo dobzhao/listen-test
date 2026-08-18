@@ -4,14 +4,15 @@
 //! - 15-18 题（填空）：调用 LLM，按 `q15_18_scoring` Prompt 评分
 //! - 19 题（口头转述）：先调 STT 转写录音，再调 LLM 按 `q19_scoring` Prompt 评分
 
-use crate::models::config::{AppConfig, ModelConfig, PromptConfig};
+use crate::models::config::{AppConfig, LlmParams, ModelConfig, PromptConfig};
 use crate::models::question::TestSession;
 use crate::models::result::{BlankResult, McqResult, RetellResult, TestResult};
 use crate::services::http_client::build_client;
-use crate::services::llm_service::{call_llm, ChatMessage, LlmError};
+use crate::services::llm_service::{call_llm_with_feedback, ChatMessage, LlmError, truncate_for_feedback};
 use crate::services::prompt_engine_service::render;
 use crate::services::stt_service::{transcribe, SttError};
 use crate::utils::json_extract::try_parse;
+use crate::utils::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -157,11 +158,22 @@ pub async fn score_blanks_15_18(
         .map_err(|e| ScoringError::Prompt(e.to_string()))?;
 
     let client = build_client().map_err(|e| ScoringError::HttpClient(e.to_string()))?;
-    let text = call_llm(&client, llm_cfg, llm_params, vec![ChatMessage::user(prompt)]).await?;
+    let retry = RetryConfig {
+        max_retries: 3, // 4 次总尝试（用户要求"3次"按字面理解 = 3 次重试 = 4 次尝试）
+        ..Default::default()
+    };
+    let parsed: BlankScoreResp = score_llm_with_feedback(
+        &client,
+        llm_cfg,
+        llm_params,
+        &retry,
+        "score_blanks_15_18",
+        prompt,
+    )
+    .await?;
 
-    info!("15-18 题评分 LLM 返回：{}", text);
+    info!("15-18 题评分 LLM 返回：{:#?}", parsed);
 
-    let parsed: BlankScoreResp = try_parse(&text)?;
     let items = parsed.blanks;
     let llm_total = parsed.total_score.unwrap_or(0.0);
 
@@ -295,44 +307,56 @@ pub async fn score_retell_19(
         }
     };
 
-    let text = match call_llm(&client, llm_cfg, llm_params, vec![ChatMessage::user(prompt)]).await {
-        Ok(t) => t,
+    let retry = RetryConfig {
+        max_retries: 3,
+        ..Default::default()
+    };
+    let parsed: RetellScore = match score_llm_with_feedback(
+        &client,
+        llm_cfg,
+        llm_params,
+        &retry,
+        "score_retell_19",
+        prompt,
+    )
+    .await
+    {
+        Ok(p) => p,
         Err(e) => {
             return RetellResult {
                 score: 0.0,
                 max_score: 10.0,
-                comment: format!("LLM 评分调用失败: {e}"),
+                comment: format!(
+                    "LLM 评分调用失败（已重试 {} 次）: {e}",
+                    retry.max_retries
+                ),
                 stt_text,
             };
         }
     };
 
-    info!("19 题评分 LLM 返回：{}", text);
+    info!("19 题评分 LLM 返回：{:#?}", parsed);
 
-    // 解析评分
-    #[derive(Debug, Deserialize)]
-    struct RetellScore {
-        score: f32,
-        #[serde(default)]
-        max_score: f32,
-        #[serde(default)]
-        comment: String,
+    RetellResult {
+        score: parsed.score,
+        max_score: if parsed.max_score > 0.0 {
+            parsed.max_score
+        } else {
+            10.0
+        },
+        comment: parsed.comment,
+        stt_text,
     }
+}
 
-    match try_parse::<RetellScore>(&text) {
-        Ok(p) => RetellResult {
-            score: p.score,
-            max_score: if p.max_score > 0.0 { p.max_score } else { 10.0 },
-            comment: p.comment,
-            stt_text,
-        },
-        Err(e) => RetellResult {
-            score: 0.0,
-            max_score: 10.0,
-            comment: format!("评分解析失败: {e}\n原始返回: {}", text),
-            stt_text,
-        },
-    }
+/// 评分专用的 LLM 解析目标结构
+#[derive(Debug, Deserialize)]
+struct RetellScore {
+    score: f32,
+    #[serde(default)]
+    max_score: f32,
+    #[serde(default)]
+    comment: String,
 }
 
 /// 完整评分入口
@@ -423,6 +447,58 @@ pub struct ScoreProgress {
 }
 
 pub const SCORE_PROGRESS_EVENT: &str = "test-score-progress";
+
+/// 评分 LLM 调用：自动重试 `max_retries + 1` 次，每次失败把错误回传给 LLM。
+///
+/// - 可重试错误：`ScoringError::Llm`（HTTP/transport）、`ScoringError::Json`（解析失败）。
+/// - 不可重试：`ScoringError::Prompt`（渲染失败）、`ScoringError::HttpClient`（构建失败）、
+///   `ScoringError::Stt`（STT 失败，重试也无济于事）。
+async fn score_llm_with_feedback<T>(
+    http: &reqwest::Client,
+    cfg: &ModelConfig,
+    params: &LlmParams,
+    retry: &RetryConfig,
+    op_name: &str,
+    prompt: String,
+) -> Result<T, ScoringError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    call_llm_with_feedback(
+        http,
+        cfg,
+        params,
+        retry,
+        op_name,
+        vec![ChatMessage::user(prompt)],
+        |text| try_parse::<T>(text).map_err(ScoringError::Json),
+        |e| matches!(e, ScoringError::Llm(_) | ScoringError::Json(_)),
+        build_scoring_feedback,
+    )
+    .await
+}
+
+/// 构造发给 LLM 的评分反馈消息（user 角色）
+///
+/// 针对不同错误类型给出针对性指令；对 JSON 解析失败附上次输出（前 1500 + 后 500 字）
+/// 便于 LLM 定位问题；对 LLM 错误（未拿到响应）则不附带原文。
+fn build_scoring_feedback(err: &ScoringError, prev_output: &str) -> String {
+    match err {
+        ScoringError::Json(e) => {
+            let truncated = truncate_for_feedback(prev_output, 1500, 500);
+            format!(
+                "你上一次的输出无法被解析为 JSON：{}.\n\n\
+                 你的上一次输出（已截断）：\n```\n{truncated}\n```\n\n\
+                 请严格按要求的 JSON 格式重新输出，**只输出 JSON**，不要包含任何解释性文字、注释或 Markdown 代码块标记。",
+                e
+            )
+        }
+        ScoringError::Llm(e) => {
+            format!("上一次调用 LLM 出现错误：{}. 请重新生成。", e)
+        }
+        _ => format!("上一次评分失败：{}. 请重新生成。", err),
+    }
+}
 
 #[cfg(test)]
 mod tests {

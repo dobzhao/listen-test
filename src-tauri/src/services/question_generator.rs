@@ -11,7 +11,7 @@ use crate::models::config::{
 use crate::models::question::{
     LongDialogue, Monologue, MultipleChoiceQuestion, RetellMaterial, ShortDialogue,
 };
-use crate::services::llm_service::{call_llm, ChatMessage, LlmError};
+use crate::services::llm_service::{call_llm_with_feedback, ChatMessage, LlmError, truncate_for_feedback};
 use crate::services::prompt_engine_service::render;
 use crate::services::scenario_picker::{
     pick_dialogue_scenarios_json, pick_monologue_scenario_json,
@@ -20,7 +20,6 @@ use crate::utils::json_extract::try_parse;
 use crate::utils::retry::RetryConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -256,12 +255,11 @@ where
     Ok(parsed)
 }
 
-/// 带反馈的多轮调用重试：
+/// 带反馈的多轮调用重试：出题专用薄封装。
 ///
-/// - 每次失败时把 assistant(原始 LLM 输出) + user(具体错误反馈) 追加到对话历史，
-///   让 LLM 在同一会话中基于反馈修正，而不是反复独立重新生成。
-/// - 重试次数与退避策略由 `retry` 控制（默认 3 次尝试、500ms 起步 ×2 退避）。
-/// - 仅 `Llm` / `Json` / `Compliance` 三类错误可重试；`Prompt` 等致命错误立即返回。
+/// 复用 `call_llm_with_feedback`，针对 `GenError` 给出：
+/// - 可重试错误：`Llm` / `Json` / `Compliance`
+/// - 不可重试：`Prompt`（模板渲染失败）
 async fn generate_with_feedback<T, F>(
     http: &reqwest::Client,
     cfg: &ModelConfig,
@@ -275,47 +273,18 @@ where
     T: serde::de::DeserializeOwned,
     F: Fn(&T) -> Result<(), String>,
 {
-    let mut messages = initial_messages;
-    let mut delay = retry.initial_delay_ms;
-    let mut last_err: Option<GenError> = None;
-
-    for attempt in 0..=retry.max_retries {
-        let text = call_llm(http, cfg, params, messages.clone()).await?;
-
-        match parse_with_validation::<T, _>(&text, &validate) {
-            Ok(parsed) => {
-                if attempt > 0 {
-                    info!(op = op_name, attempt, "重试成功");
-                }
-                return Ok(parsed);
-            }
-            Err(e) => {
-                let retryable = matches!(
-                    e,
-                    GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)
-                );
-                if !retryable || attempt == retry.max_retries {
-                    warn!(
-                        op = op_name,
-                        attempt,
-                        error = %e,
-                        "重试耗尽或不可重试，停止"
-                    );
-                    return Err(e);
-                }
-                let feedback = build_feedback_message(&e, &text);
-                messages.push(ChatMessage::assistant(text));
-                messages.push(ChatMessage::user(feedback));
-                last_err = Some(e);
-
-                warn!(op = op_name, attempt, "操作失败，{}ms 后重试", delay);
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                delay = (((delay as f64) * retry.backoff_factor) as u64).min(retry.max_delay_ms);
-            }
-        }
-    }
-
-    Err(last_err.expect("loop guarantees last_err Some"))
+    call_llm_with_feedback(
+        http,
+        cfg,
+        params,
+        retry,
+        op_name,
+        initial_messages,
+        |text| parse_with_validation::<T, _>(text, &validate),
+        |e| matches!(e, GenError::Llm(_) | GenError::Json(_) | GenError::Compliance(_)),
+        build_feedback_message,
+    )
+    .await
 }
 
 /// 构造发给 LLM 的反馈消息（user 角色）
@@ -349,19 +318,6 @@ fn build_feedback_message(err: &GenError, prev_output: &str) -> String {
         ),
         _ => format!("上一次生成失败：{}. 请重新生成。", err),
     }
-}
-
-/// 按字符数截断字符串（保留 UTF-8 完整性），保留头尾两段以辅助 LLM 定位
-fn truncate_for_feedback(s: &str, head_chars: usize, tail_chars: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= head_chars + tail_chars {
-        return s.to_string();
-    }
-    let mut head: String = chars.iter().take(head_chars).collect();
-    let tail: String = chars.iter().skip(chars.len() - tail_chars).collect();
-    head.push_str("\n... (已截断中间部分) ...\n");
-    head.push_str(&tail);
-    head
 }
 
 /// 校验 1-4 题结构

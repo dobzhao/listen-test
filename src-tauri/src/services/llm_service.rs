@@ -13,8 +13,10 @@ use eventsource_stream as ess;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fmt::Display;
+use std::time::Duration;
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum LlmError {
@@ -188,4 +190,83 @@ pub async fn connection_test(
         .await?;
     let _ = ensure_success(resp).await?;
     Ok(())
+}
+
+/// 带反馈的多轮 LLM 调用。
+///
+/// - 每次失败：把 assistant(原始 LLM 输出) + user(具体错误反馈) 追加到对话历史，
+///   让 LLM 在同一会话中基于反馈修正。
+/// - 可重试错误由 `is_retryable` 回调决定；不可重试则立即返回。
+/// - 反馈文本由 `build_feedback` 回调生成（不同 error 类型给不同指令）。
+/// - 退避策略由 `retry` 控制（默认 500ms 起步 ×2，封顶 5s）。
+pub async fn call_llm_with_feedback<T, E, F, R, B>(
+    http: &reqwest::Client,
+    cfg: &ModelConfig,
+    params: &LlmParams,
+    retry: &RetryConfig,
+    op_name: &str,
+    initial_messages: Vec<ChatMessage>,
+    parse: F,
+    is_retryable: R,
+    build_feedback: B,
+) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: Display + From<LlmError>,
+    F: Fn(&str) -> Result<T, E>,
+    R: Fn(&E) -> bool,
+    B: Fn(&E, &str) -> String,
+{
+    let mut messages = initial_messages;
+    let mut delay = retry.initial_delay_ms;
+    let mut last_err: Option<E> = None;
+
+    for attempt in 0..=retry.max_retries {
+        let text = call_llm(http, cfg, params, messages.clone()).await?;
+
+        match parse(&text) {
+            Ok(parsed) => {
+                if attempt > 0 {
+                    info!(op = op_name, attempt, "重试成功");
+                }
+                return Ok(parsed);
+            }
+            Err(e) => {
+                if !is_retryable(&e) || attempt == retry.max_retries {
+                    warn!(
+                        op = op_name,
+                        attempt,
+                        error = %e,
+                        "重试耗尽或不可重试，停止"
+                    );
+                    return Err(e);
+                }
+                let feedback = build_feedback(&e, &text);
+                messages.push(ChatMessage::assistant(text));
+                messages.push(ChatMessage::user(feedback));
+                last_err = Some(e);
+
+                warn!(op = op_name, attempt, "操作失败，{}ms 后重试", delay);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                delay = (((delay as f64) * retry.backoff_factor) as u64).min(retry.max_delay_ms);
+            }
+        }
+    }
+
+    Err(last_err.expect("loop guarantees last_err Some"))
+}
+
+/// 按字符数截断字符串（保留 UTF-8 完整性），保留头尾两段以辅助 LLM 定位
+///
+/// 比 `head_chars + tail_chars` 短时原样返回；否则保留头部 + 省略标记 + 尾部。
+pub fn truncate_for_feedback(s: &str, head_chars: usize, tail_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= head_chars + tail_chars {
+        return s.to_string();
+    }
+    let mut head: String = chars.iter().take(head_chars).collect();
+    let tail: String = chars.iter().skip(chars.len() - tail_chars).collect();
+    head.push_str("\n... (已截断中间部分) ...\n");
+    head.push_str(&tail);
+    head
 }
