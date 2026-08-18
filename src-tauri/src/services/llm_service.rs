@@ -85,7 +85,7 @@ async fn call_llm_once(
     config: &ModelConfig,
     body: serde_json::Value,
 ) -> Result<String, LlmError> {
-    debug!(url, "调用 LLM");
+    debug!(url, prompt = %body, "调用 LLM（请求体）");
     let resp = client
         .post(url)
         .headers(auth_headers(config))
@@ -139,6 +139,7 @@ async fn call_llm_once(
         }
     }
 
+    debug!(response = %full_text, "调用 LLM（响应全文）");
     Ok(full_text)
 }
 
