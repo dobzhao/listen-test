@@ -6,12 +6,12 @@
 //! - `m1.wav`：第 13-14 题独白
 //! - `retell.wav`：第 15-19 题听力材料
 
-use crate::models::config::{AppConfig, ModelConfig};
+use crate::models::config::ModelConfig;
 use crate::models::question::{
     DialogueTurn, LongDialogue, Monologue, RetellMaterial, ShortDialogue,
 };
 use crate::services::tts_service::{synthesize_dialogue, synthesize_one, TtsError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
 use tracing::info;
 
@@ -79,40 +79,3 @@ pub async fn synthesize_all(
     Ok(paths)
 }
 
-/// 单独合成 1 段对话音频（用于设置界面"试生成"按钮）
-#[allow(dead_code)]
-pub async fn synthesize_one_dialogue(
-    client: &reqwest::Client,
-    tts_cfg: &ModelConfig,
-    turns: &[DialogueTurn],
-    output: &Path,
-    silence_ms: u32,
-) -> Result<(), AudioPipelineError> {
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = parent.join("tmp");
-    std::fs::create_dir_all(&tmp)?;
-    let tmp_out = parent.join(format!(
-        "{}.wav",
-        output.file_stem().and_then(|s| s.to_str()).unwrap_or("out")
-    ));
-    synthesize_dialogue(client, tts_cfg, turns, &tmp, &tmp_out, silence_ms).await?;
-    Ok(())
-}
-
-/// 单独合成一段独白/单 voice 文本
-#[allow(dead_code)]
-pub async fn synthesize_one_text(
-    client: &reqwest::Client,
-    tts_cfg: &ModelConfig,
-    text: &str,
-    output: &Path,
-) -> Result<PathBuf, AudioPipelineError> {
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let bytes = synthesize_one(client, tts_cfg, text, "af_heart", 1.0).await?;
-    std::fs::write(output, &bytes)?;
-    Ok(output.to_path_buf())
-}
-
-#[allow(dead_code)]
-pub fn _suppress_unused_warning(_: &AppConfig) {}

@@ -85,7 +85,6 @@ pub fn run() {
             commands::config::open_config_dir,
             // 模型连接测试
             commands::llm::test_llm_connection,
-            commands::llm::generate_with_llm,
             commands::tts::test_tts_connection,
             commands::stt::test_stt_connection,
             commands::stt::transcribe_audio,

@@ -79,19 +79,6 @@ export async function testSttConnection(stt: AppConfig["stt"]): Promise<string> 
   return invoke<string>("test_stt_connection", { config: stt });
 }
 
-export async function generateWithLlm(
-  config: AppConfig["llm"],
-  params: AppConfig["llm_params"],
-  template: string,
-  vars: Record<string, string>
-): Promise<string> {
-  return invoke<string>("generate_with_llm", {
-    config,
-    params,
-    template,
-    vars,
-  });
-}
 
 export async function transcribeAudio(
   config: AppConfig["stt"],

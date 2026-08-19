@@ -79,7 +79,7 @@ peiyuan/
 ├── src/                              # 前端 React + TS
 │   ├── components/
 │   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog
-│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / GenerationPreview / LlmParamsPanel / TimingPanel / DifficultyPanel
+│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / LlmParamsPanel / TimingPanel / DifficultyPanel
 │   │   ├── test/                     # GlobalHeader / PhaseCountdown / QuestionDisplay / FillBlankTable / RecorderPanel
 │   │   ├── ErrorBoundary.tsx
 │   │   └── Toast.tsx

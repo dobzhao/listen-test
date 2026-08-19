@@ -16,7 +16,6 @@ import { useSettingsStore } from "@/store/settings";
 import { confirm } from "@/store/confirm";
 import { ModelConfigForm } from "@/components/settings/ModelConfigForm";
 import { PromptEditor } from "@/components/settings/PromptEditor";
-import { GenerationPreview } from "@/components/settings/GenerationPreview";
 import { AudioSettingsPanel } from "@/components/settings/AudioSettingsPanel";
 import { LlmParamsPanel } from "@/components/settings/LlmParamsPanel";
 import { MicTest } from "@/components/settings/MicTest";
@@ -194,7 +193,6 @@ export default function SettingsPage() {
               title="1-4 题出题 Prompt"
               description="生成 4 段短对话，每段配 1 道选择题。"
             />
-            <GenerationPreview promptKey="q1_4" />
 
             <Separator />
 
