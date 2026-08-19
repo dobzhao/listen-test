@@ -1,6 +1,6 @@
 // 麦克风与扬声器设备测试：
 // - 列出所有输入/输出设备，可单选
-// - 输入设备测试：录制 3 秒并保存 wav，前端可播放回放
+// - 输入设备测试：录制 5 秒并保存 wav，前端可播放回放
 // - 输出设备测试：通过后端播放 440Hz 测试音
 
 import { useEffect, useState, useRef } from "react";
@@ -97,14 +97,14 @@ export function MicTest() {
     const start = Date.now();
     recordTimerRef.current = window.setInterval(() => {
       const elapsed = Date.now() - start;
-      const pct = Math.min(100, (elapsed / 3000) * 100);
+      const pct = Math.min(100, (elapsed / 5000) * 100);
       setRecordProgress(pct);
     }, 50);
 
     try {
       const resp = await testInputDevice({
         deviceName: selectedInput,
-        durationMs: 3000,
+        durationMs: 5000,
       });
       setRecordedPath(resp.outputPath);
     } catch (e) {
@@ -229,7 +229,7 @@ export function MicTest() {
               ) : (
                 <>
                   <Mic className="w-4 h-4 mr-2" />
-                  录音 3 秒
+                  录音 5 秒
                 </>
               )}
             </Button>

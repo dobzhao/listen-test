@@ -105,6 +105,7 @@ pub struct TestInputArgs {
 }
 
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestInputResponse {
     pub output_path: String,
     pub duration_ms: u64,
@@ -112,12 +113,24 @@ pub struct TestInputResponse {
 }
 
 /// 使用指定输入设备录制 N 秒音频并保存为 wav
+///
+/// 命令本身是 `async`，内部通过 `spawn_blocking` 把阻塞循环放到 tokio 阻塞线程池，
+/// 避免 Tauri 主线程 / UI 线程被卡死（否则 Windows 会弹出"程序未响应"对话框）。
 #[tauri::command]
-pub fn test_input_device(
+pub async fn test_input_device(
     app: AppHandle,
     args: TestInputArgs,
 ) -> Result<TestInputResponse, String> {
-    let duration_ms = args.duration_ms.unwrap_or(3000);
+    tauri::async_runtime::spawn_blocking(move || test_input_device_blocking(app, args))
+        .await
+        .map_err(|e| format!("录音线程被取消或发生 panic: {e}"))?
+}
+
+fn test_input_device_blocking(
+    app: AppHandle,
+    args: TestInputArgs,
+) -> Result<TestInputResponse, String> {
+    let duration_ms = args.duration_ms.unwrap_or(5000);
     let device = find_input_device(args.device_name.as_deref())?;
     let device_name = device.name().unwrap_or_else(|_| "<未知>".to_string());
     info!(device = %device_name, duration_ms, "测试输入设备：开始录音");
@@ -182,7 +195,7 @@ pub fn test_input_device(
     // 在主线程上收集采样，到时长后跳出循环
     let mut samples = Vec::new();
     let collect_start = std::time::Instant::now();
-    let target_samples = (sample_rate as u64 * duration_ms / 1000) as usize;
+    let target_samples = (sample_rate as u64 * duration_ms / 1000) as usize * channels as usize;
     while collect_start.elapsed() < Duration::from_millis(duration_ms) {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => samples.extend(chunk),
