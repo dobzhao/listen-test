@@ -23,6 +23,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tracing::{info, warn};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 #[derive(Debug, Error)]
 pub enum GenError {
     #[error("LLM 调用失败: {0}")]
@@ -99,6 +102,13 @@ pub struct TableRowRaw {
     pub overview: String,
     pub details: Vec<String>,
 }
+
+/// 匹配 passage 中所有 `___NN___` 占位符（NN 为 1-2 位数字）。
+///
+/// 编译期 `expect` 失败代表正则表达式字面量本身写错——开发期就 panic，不进运行时。
+static Q15_18_BLANK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"___(\d{1,2})___").expect("Q15_18_BLANK_RE 编译失败")
+});
 
 // ===== 1-4 题 =====
 
@@ -389,19 +399,106 @@ fn validate_choice_question(
 }
 
 /// 校验 15-18 题结构
+///
+/// 硬校验（违反即 `Err` 触发重试反馈给 LLM）：
+///   1. table 必须 3 行
+///   2. blanks 必须包含 "15".."18" 全部 4 个 key
+///   3. 每个 blank value 必须非空
+///   4. 表格 Details 中 `___NN___` 占位符总数必须正好 4 个，且 NN ∈ {15,16,17,18} 互不重复
+///   5. passage 必须是完整原文，**不得**包含任何 `___NN___` 占位符
+///      （passage 会原样送进 TTS 与评分原文）
+///
+/// 软校验（WARN 不阻断）：词数偏离 150-300 区间
 fn validate_q15_18(raw: &Q15To18Raw) -> Result<(), String> {
+    // —— 软校验：词数 ——
     let wc = raw.passage.split_whitespace().count();
     if !(150..=300).contains(&wc) {
         warn!(words = wc, "听力材料词数偏离 200-220 范围");
     }
+
+    // —— 硬校验 1：table 行数 ——
     if raw.table.rows.len() != 3 {
         return Err(format!("表格应为 3 行，实际 {} 行", raw.table.rows.len()));
     }
+
+    // —— 硬校验 2 + 3：blanks key 存在性 + value 非空 ——
     for key in ["15", "16", "17", "18"] {
-        if !raw.blanks.contains_key(key) {
-            return Err(format!("缺少第 {} 题标准答案", key));
+        match raw.blanks.get(key) {
+            None => return Err(format!("缺少第 {} 题标准答案", key)),
+            Some(v) if v.trim().is_empty() => {
+                return Err(format!("第 {} 题标准答案为空字符串", key))
+            }
+            _ => {}
         }
     }
+
+    // —— 硬校验 4：表格 Details 中 `___NN___` 占位符总数 = 4 且 NN ∈ {15,16,17,18} 互不重复 ——
+    let placeholders: Vec<String> = raw
+        .table
+        .rows
+        .iter()
+        .flat_map(|r| r.details.iter())
+        .flat_map(|d| Q15_18_BLANK_RE.captures_iter(d))
+        .map(|cap| cap[1].to_string())
+        .collect();
+    let in_scope: Vec<&String> = placeholders
+        .iter()
+        .filter(|n| matches!(n.as_str(), "15" | "16" | "17" | "18"))
+        .collect();
+
+    if in_scope.len() != 4 {
+        let found = if placeholders.is_empty() {
+            "<无>".to_string()
+        } else {
+            placeholders
+                .iter()
+                .map(|n| format!("___{}___", n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        return Err(format!(
+            "表格 Details 中 `___NN___` 占位符必须正好 4 个且编号 ∈ {{15,16,17,18}}，\
+实际在 scope 内找到 {} 个（找到的全部占位符：{}）",
+            in_scope.len(),
+            found
+        ));
+    }
+    let unique: std::collections::HashSet<&str> = in_scope.iter().map(|s| s.as_str()).collect();
+    if unique.len() != 4 {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for n in &in_scope {
+            *counts.entry(n.as_str()).or_insert(0) += 1;
+        }
+        let dup_list: Vec<String> = counts
+            .iter()
+            .filter(|(_, c)| **c > 1)
+            .map(|(n, c)| format!("___{}___ 出现 {} 次", n, c))
+            .collect();
+        let missing: Vec<&str> = ["15", "16", "17", "18"]
+            .iter()
+            .copied()
+            .filter(|k| !unique.contains(k))
+            .collect();
+        return Err(format!(
+            "表格 Details 中占位符重复或缺失：重复=[{}]，缺失=[{}]",
+            dup_list.join("; "),
+            missing.join(", ")
+        ));
+    }
+
+    // —— 硬校验 5：passage 中不得残留 `___NN___` ——
+    let leaked: Vec<String> = Q15_18_BLANK_RE
+        .captures_iter(&raw.passage)
+        .map(|cap| format!("___{}___", &cap[1]))
+        .collect();
+    if !leaked.is_empty() {
+        return Err(format!(
+            "passage 必须是完整原文，不得包含挖空占位符（发现：{}），\
+             占位符只能出现在表格 Details 中",
+            leaked.join(", ")
+        ));
+    }
+
     Ok(())
 }
 
@@ -617,4 +714,150 @@ pub async fn generate_all_for_test(
     .await?;
 
     Ok((short, long, monologue, retell))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_table() -> Vec<TableRowRaw> {
+        fixture_table_with(vec![
+            vec!["row0 contains ___15___".to_string()],
+            vec!["row1 contains ___16___".to_string()],
+            vec![
+                "row2a contains ___17___".to_string(),
+                "row2b contains ___18___".to_string(),
+            ],
+        ])
+    }
+
+    fn fixture_table_with(rows: Vec<Vec<String>>) -> Vec<TableRowRaw> {
+        rows.into_iter()
+            .enumerate()
+            .map(|(i, details)| TableRowRaw {
+                overview: format!("ov{}", i),
+                details,
+            })
+            .collect()
+    }
+
+    fn fixture_blanks() -> HashMap<String, String> {
+        [
+            ("15".to_string(), "young".to_string()),
+            ("16".to_string(), "teacher".to_string()),
+            ("17".to_string(), "colour".to_string()),
+            ("18".to_string(), "rules".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    #[test]
+    fn validate_q15_18_ok() {
+        // passage 必须保持完整原文：4 个关键词原样出现，不含 ___NN___
+        let passage = "The young teacher brought several fresh colour samples to class today. \
+                       Students watched carefully as the teacher explained the rules. \
+                       They learned about colours and rules in great detail."
+            .to_string();
+        let raw = Q15To18Raw {
+            passage,
+            table: TableRaw { rows: fixture_table() },
+            blanks: fixture_blanks(),
+        };
+        assert!(validate_q15_18(&raw).is_ok());
+    }
+
+    /// 用户反馈的核心场景：表格 Details 只挖了 2 个空，但 blanks map 有 4 个 key
+    #[test]
+    fn validate_q15_18_rejects_missing_two_blanks() {
+        let raw = Q15To18Raw {
+            passage: "The young teacher explained rules clearly to every student today."
+                .to_string(),
+            table: TableRaw {
+                rows: fixture_table_with(vec![
+                    vec!["row0 contains ___15___".to_string()],
+                    vec!["row1 contains ___16___".to_string()],
+                    vec!["row2 contains no placeholder".to_string()],
+                ]),
+            },
+            blanks: [
+                ("15".to_string(), "students".to_string()),
+                ("16".to_string(), "all".to_string()),
+                ("17".to_string(), "students".to_string()),
+                ("18".to_string(), "all".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let err = validate_q15_18(&raw).unwrap_err();
+        assert!(err.contains("占位符必须正好 4 个"), "实际错误：{}", err);
+        assert!(err.contains("2 个"), "实际错误：{}", err);
+        assert!(err.contains("表格 Details"), "实际错误：{}", err);
+    }
+
+    #[test]
+    fn validate_q15_18_rejects_empty_blank_value() {
+        let raw = Q15To18Raw {
+            passage: "The young teacher explained rules clearly to every student today."
+                .to_string(),
+            table: TableRaw { rows: fixture_table() },
+            blanks: [
+                ("15".to_string(), "students".to_string()),
+                ("16".to_string(), "all".to_string()),
+                ("17".to_string(), "".to_string()), // 空串
+                ("18".to_string(), "daily".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let err = validate_q15_18(&raw).unwrap_err();
+        assert!(err.contains("空字符串"), "实际错误：{}", err);
+        assert!(err.contains("17"), "实际错误：{}", err);
+    }
+
+    #[test]
+    fn validate_q15_18_rejects_duplicate_placeholder() {
+        // 表格 Details 中 `___15___` 出现 2 次、缺 `___18___` → 进入"重复/缺失"分支
+        let raw = Q15To18Raw {
+            passage: "The young teacher explained rules clearly to every student today."
+                .to_string(),
+            table: TableRaw {
+                rows: fixture_table_with(vec![
+                    vec!["row0a contains ___15___".to_string()],
+                    vec!["row1 contains ___16___".to_string()],
+                    vec![
+                        "row2a contains ___15___ again".to_string(),
+                        "row2b contains ___17___".to_string(),
+                    ],
+                ]),
+            },
+            blanks: [
+                ("15".to_string(), "students".to_string()),
+                ("16".to_string(), "all".to_string()),
+                ("17".to_string(), "students".to_string()),
+                ("18".to_string(), "all".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let err = validate_q15_18(&raw).unwrap_err();
+        assert!(err.contains("占位符重复或缺失"), "实际错误：{}", err);
+        assert!(err.contains("___15___"), "实际错误：{}", err);
+    }
+
+    /// 反向守卫：即使表格 Details 4 个占位符齐全，passage 里出现占位符也会被硬校验 5 拒掉。
+    /// 这是本次线上问题的核心——老校验只看 passage，新校验双侧约束。
+    #[test]
+    fn validate_q15_18_rejects_placeholder_in_passage() {
+        let raw = Q15To18Raw {
+            passage: "The young teacher explained rules clearly. \
+                       ___15___ watched and ___16___ learned about ___17___ and ___18___."
+                .to_string(),
+            table: TableRaw { rows: fixture_table() },
+            blanks: fixture_blanks(),
+        };
+        let err = validate_q15_18(&raw).unwrap_err();
+        assert!(err.contains("passage"), "实际错误：{}", err);
+        assert!(err.contains("___15___"), "实际错误：{}", err);
+    }
 }

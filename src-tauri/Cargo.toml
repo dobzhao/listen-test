@@ -34,6 +34,9 @@ eventsource-stream = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# 文本正则（q15_18 挖空占位符校验）
+regex = "1"
+
 # 错误处理
 anyhow = "1"
 thiserror = "1"
