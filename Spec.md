@@ -1,8 +1,12 @@
 # 英语听力练习程序 - 详细需求规格（Spec）
 
-> 版本：v1.0
-> 最后更新：2026-08-14
+> 版本：v1.1
+> 最后更新：2026-08-21
 > 适用代码版本：v0.1.0（已交付全部 6 个 Phase）
+>
+> **v1.1 新增：自适应难度（Adaptive Difficulty）** —— 详见 §3.6 / §5.5 / §6.5 / §7.5 / §九
+>
+> **v1.1 增量需求（待实现）**：§11 待实现的功能 — 仅新题更新能力 / 难度 Tab 暴露参数 / 关闭自动档自动重置 / 结算页升/降可视化
 
 ## 一、项目概述
 
@@ -15,6 +19,8 @@
 用户在桌面应用中依次完成 **19 道题目**，其中：
 - **第 1-14 题**：听后选择（听对话/独白，从 A/B/C 三个选项中选择正确答案）
 - **第 15-19 题**：听后转述（听长材料 → 填写 4 个挖空单词 → 口头转述录音 → LLM 评分）
+
+每次完整 19 题阅卷完成后，程序根据三段得分率自适应地调整用户的难度档位（详见第十一节）；下次测试自动使用调整后的档位生成题目。v1.1 起用户可在「设置 → 难度」开启**自动切换难度**开关；开启后系统根据每次 19 题的得分率自动调整下一次测试的难度档位（共 3 档），关闭时保留 v1.0 的手动选档行为。开关切换时手动档选择会被同步启用/禁用。
 
 ### 1.3 目标用户
 
@@ -143,6 +149,24 @@
 - 提供「恢复默认」按钮一键还原
 - 修改后必须点击「保存时长」按钮才会写入 `config.json`
 
+### 3.6 测试结束后的自适应难度更新（v1.1+）
+
+每次完整 19 题阅卷完成后，系统按三段得分率自适应调整下次测试难度档位：
+
+- **触发时机**：每次「结算页」展示前，即 `score_full_test` 完成之后
+- **三个输入分数**（全部 ∈ [0, 1]）：
+
+  | 符号 | 含义 | 计算 |
+  |------|------|------|
+  | `a`  | 1-14 题正确率 | `correct_count_1_to_14 / 14` |
+  | `b`  | 15-18 题填空得分率 | `blanks_total_score / 6` |
+  | `c`  | 19 题归一化分 | `q19_score / 10` |
+
+- **综合得分** `S = 0.5·a + 0.2·b + 0.3·c`（默认权重；与 crate `params.rs::default()` 一致）
+- **得分下限**：分数 < 0.6（`score_floor`）按"未达标"处理，但综合分不会跌破 0.6
+- **输出**：下一档难度（`junior_high` / `senior_high` / `undergraduate`），传给下一次 `generate_test_session`；仅在「自动模式」开启时实际生效
+- **完整算法**（EMA 能力分更新 + 滞回阈值）由 crate `adaptive_difficulty` 实现；本节仅描述对外行为，详见 §6.5 与 CLAUDE.md §4.4.8
+
 ---
 
 ## 四、模型服务集成
@@ -255,6 +279,22 @@ Form-data: file=audio.wav, model=..., language=en
 
 设置界面每个 Prompt 模板都有"恢复默认"按钮，点击后将对应模板重置为 `src-tauri/prompts/<key>.txt` 编译期默认值，**仅影响该模板，不影响其他模板或难度/场景配置**。
 
+### 5.5 自适应模式与 Prompt 占位符（v1.1+）
+
+> **关于"是否改 Prompt 模板"**：不改。`src-tauri/prompts/*.txt` 五个文件原样不动，`{{DIFFICULTY_DEMAND_1_4}}` / `{{DIFFICULTY_DEMAND_5_14}}` / `{{DIFFICULTY_DEMAND_15_18}}` 三个占位符保留。变化只在**运行时**：`inject_difficulty_vars`（位于 `services/question_generator.rs`）选择哪一档的 `demand_*` 文字注入模板——自动档下取 `adaptive.current_level` 对应的档，手动档下取 `difficulty.level` 对应的档。
+>
+> **关于"兜底难度"**：兜底值 `"junior_high"` 不是新引入的——`inject_difficulty_vars` 现有代码已经写明「未知 level 兜底为 junior_high」（见 §5.3 第 4 条）。新功能只是把"未知 level"这一判断前置到上游（先决定 mode → 再决定 level），兜底值保持一致。
+
+- **Prompt 模板本体不变**：5 个 `src-tauri/prompts/*.txt` 文件不动，三个 `DIFFICULTY_DEMAND_*` 占位符语义保留
+- `difficulty.level`（String）保留语义 = 用户手动选择的档 / 初始档 / 兜底档
+- 新增 `adaptive.current_level`（String，同枚举）= 下一次出题的实际档（当 mode = Auto 时）
+- `inject_difficulty_vars` 取值来源（运行时决定）：
+  - `mode = Manual` → 直接使用 `difficulty.level`
+  - `mode = Auto`   → 使用 `adaptive.current_level`
+  - 任一情况若 level 值不合法 / 缺字段 → 沿用现有兜底 `"junior_high"`（行为与 v1.0 一致）
+- `DifficultyDemand` 三档文字不变（仍由用户在「设置 → 难度」Tab 编辑）
+- 引擎忽略未引用 KEY，3 个 `DIFFICULTY_DEMAND_*` 同时注入是安全的
+
 ---
 
 ## 六、评分规则
@@ -287,22 +327,37 @@ Form-data: file=audio.wav, model=..., language=en
 
 `总分 = 1-14 正确数 + 15-18 得分 + 19 得分`，满分 30。
 
+### 6.5 自适应难度更新（v1.1+）
+
+- `score_full_test` 在返回 `TestResult` 给前端**之前**调用一次 `adaptive_difficulty::update(&mut state, a, b, c)`
+- **输入校验**：a / b / c 必须 ∈ [0, 1]，否则返回 `AdaptiveError::InvalidScoreRate` —— 前端显示 toast「自适应更新失败」，state 不被错误路径修改（crate 保证事务性）
+- **输出**：`UpdateTrace` 持久化到 `session.cache.adaptive_trace`，用于结算页调试信息
+- **滞回阈值**（`hysteresis buffer = 20`，默认）：
+  - 当前 `junior_high`：`ability > 220` → 升 `senior_high`；否则维持
+  - 当前 `senior_high`：`ability > 420` → 升 `undergraduate`；`ability ≤ 180` → 降 `junior_high`；否则维持
+  - 当前 `undergraduate`：`ability ≤ 380` → 降 `senior_high`；否则维持
+  - **不允许跨级跳跃**：`junior_high` ↔ `undergraduate` 之间必须经过 `senior_high`
+- 完整 11 步算法详见 CLAUDE.md §4.4.8 与 crate `INTEGRATION.md`
+
 ---
 
 ## 七、UI 需求
 
 ### 7.1 设置界面
 
-6 个 Tab：
+7 个 Tab：
 1. **LLM**：host / port / api_path / model / api_key / protocol + 调用参数
 2. **TTS**：同上
 3. **STT**：同上
 4. **提示词**：5 个 Prompt 模板可编辑 + 恢复默认
 5. **音频**：播放音量、麦克风增益、TTS 拼接静音时长
 6. **流程时长**：答题过程每个阶段等待时长 + 恢复默认
-7. **设备测试**：可选输入/输出设备 + 录音测试 + 测试音播放
+7. **难度**：三档文字模板编辑 + 档位选择 + 「自动切换难度」开关 + 「重置自适应状态」按钮（v1.1+，详见 §7.5）
+8. **设备测试**：可选输入/输出设备 + 录音测试 + 测试音播放
 
 每个模型配置都有"测试连接"按钮（最小请求验证）。
+
+v1.1 起「难度」Tab 增加「自动切换难度」开关；开启时手动档选择下拉框自动禁用（greyed out），仅展示只读读数（当前能力分 / 趋势 / 已更新次数 / 当前自适应档）；关闭时手动档选择可用。同时新增「重置自适应状态」按钮（二次确认）。详见 §7.5。
 
 ### 7.2 主菜单
 
@@ -326,6 +381,29 @@ Form-data: file=audio.wav, model=..., language=en
 - 15-18 题：表格展示用户答案 vs 标准答案
 - 19 题：分数 + LLM 评语 + STT 转写文本 + 听力原文
 - 「重新测试」/「返回主菜单」按钮
+- 自适应档位卡片（如有变化则高亮 "提升 ⬆ / 下降 ⬇" 箭头 + 旧档 → 新档）
+- 当前 ability_score（保留 1 位小数）+ trend（保留 2 位小数）+ update_count
+- 自适应 trace 可展开/折叠（默认折叠），展示综合得分、ability_before/after、level_before/after
+
+### 7.5 自适应难度 UI（v1.1+）
+
+**设置 → 难度 Tab 自适应区**：
+
+- 「自动切换难度」开关（默认关闭）
+  - 开启：手动档下拉框自动禁用（greyed out），下拉框内显示提示「已启用自动档」
+  - 关闭：手动档下拉框恢复可用
+- 「重置自适应状态」按钮（二次确认对话框）
+  - 重置后 `ability_score = 100`、`trend = 0`、`current_level` = 当前手动档（开关关闭后保留当前手动档值；开关开启时回退 `junior_high`）
+  - `update_count` 归零
+- 只读读数（无论开关状态都展示，便于用户参考）：
+  - 当前 `ability_score`（1 位小数）
+  - 当前 `trend`（2 位小数）
+  - 已更新次数 `update_count`
+  - 当前自适应档（`current_level` 的中文字幕）
+
+**主菜单（首页）**：
+
+- 在 LLM / TTS / STT 三组配置状态下方追加「难度模式：自动 / 手动 | 当前档：X」一行
 
 ---
 
@@ -361,12 +439,22 @@ Form-data: file=audio.wav, model=..., language=en
 - 网络中断有清晰错误提示
 - 配置缺失有占位默认
 
+### 8.6 自适应算法非功能性约束（v1.1+）
+
+- **算子纯函数 + 内部状态机**：单次 `update` 调用 O(1) 时间，无 I/O、无 tokio、无锁
+- **失败语义**：参数非法 / NaN → `AdaptiveError` 返回，state 保持原值不变（事务性，crate 保证）
+- **持久化原子写入**：`adaptive_state.json` 使用 `tempfile + rename`（详见 CLAUDE.md §4.4.8）
+- **启动加载**：`validate_loaded` 校验；越界或损坏字段 → 自动 `reset_to(junior_high)`，不向用户报错
+- **性能**：每次结算多耗时 < 1ms（纯计算），不影响 90 秒录音后的体感
+
 ---
 
 
 ## 九、配置兼容性
 
 `config.json` 中新增字段（如 `protocol`）通过 `#[serde(default = ...)]` 自动回退到默认值，向后兼容旧配置文件，无需用户手动迁移。
+
+v1.1 起新增 `difficulty.mode` 字段（`"auto" | "manual"`，默认 `"manual"`）。运行时态独立存放在 `{app_data_dir}/adaptive_state.json`（结构：`{ ability_score, trend, current_level, update_count }`），缺失或损坏时自动以默认初始档（`junior_high`，`ability = 100`）重建。所有新字段使用 `#[serde(default)]`，旧 `config.json` 无需迁移。
 
 ---
 
@@ -377,3 +465,107 @@ Form-data: file=audio.wav, model=..., language=en
 3. **录音固定采样率 16kHz**：简化 STT 处理，重采样在保存时完成
 4. **同时只能运行一个测试会话**：未实现多会话隔离
 5. **19 题录音时长固定 90 秒**：受 STT/LLM 判分稳定性约束，不可在 UI 中调整；其余 10 个流程时长均可在「设置 → 流程时长」中调整
+6. **自适应模式开启时，手动档下拉框被禁用**，仅展示只读读数；用户需关闭自动档才能手动切档（v1.1+）
+7. **`adaptive_state.json` 损坏或字段越界时，下次启动自动回退到默认初始档**（不抛错，v1.1+）
+8. **自适应状态独立于「难度 Tab」文字配置**：用户编辑 `demand_*` 文字不影响算法（v1.1+）
+
+---
+
+## 十一、待实现的功能（v1.1+）
+
+> 本节是 v1.1 自适应难度的**增量需求**，与 §3.6 / §5.5 / §6.5 / §7.5 互补；既有章节描述初步设计，本节描述需要进一步实现的细节与行为修正。每条都给出**与既有节的冲突/增量说明**，方便实现方定位。
+>
+> 注：本节文档阶段不修改 Rust / TS 代码，仅作需求记录。
+
+### 11.1 触发条件细化：仅「新题」更新能力
+
+> **冲突说明**：§6.5 描述「每次 `score_full_test` 完成后调用 `adaptive::update`」是粗粒度；本节细化**触发条件**。
+
+- `score_full_test` 必须新增接收 `is_retest: bool` 参数
+  - `is_retest = false`（来自主菜单「开始测试」`MainMenu::handleStart`）：正常调用 `adaptive::update`
+  - `is_retest = true`（来自结算页 `Result.tsx::handleRetest`）：**跳过** `adaptive::update` 调用；ability / trend / current_level / update_count 全部不变；trace 不写、`UpdateTrace` 不返回
+- **前端标记**：
+  - `src/store/result.ts::load(is_retest)` 新增 `is_retest` 参数
+  - `Result.tsx::handleRetest` 在 `await startTestFlow()` 之前调用 `useResultStore.getState().setIsRetest(true)`，下次进入结算页时由 `useResultStore.load(is_retest)` 透传给 `scoreFullTest(is_retest=true)`
+- **后端接收**：
+  - `commands/scoring.rs::score_full_test(is_retest: bool)` 同步新增参数
+  - `services/scoring.rs::score_full_test(is_retest)` 根据 `is_retest` 分支：true → 跳过 adaptive；false → 调用 `adaptive_difficulty::update(&mut state, &params, a, b, c)`
+
+### 11.2 难度 Tab 暴露自适应参数
+
+> **冲突说明**：§7.5 仅描述「开关 + 重置按钮 + 只读读数」，未涉及算法参数；本节新增**自适应参数配置区**。
+
+- 参数全部来自 crate `adaptive_difficulty::Params` 的 15 个 `f64` 字段，UI 全部暴露：
+
+  | 字段 | 默认 | 含义（来源 `params.rs` 注释） |
+  |------|------|-------------------------------|
+  | `weight_a` | 0.5 | 1-14 题权重（选择题） |
+  | `weight_b` | 0.2 | 15-18 题权重（填空） |
+  | `weight_c` | 0.3 | 19 题权重（口头转述） |
+  | `score_floor` | 0.6 | 综合得分下限，低于此按"未达标"处理 |
+  | `alpha` | 0.4 | EMA 平滑系数，越大越看重最近一次表现 |
+  | `base_magnitude` | 3.0 | 单次调整最小幅度 |
+  | `k` | 10.0 | 趋势放大系数（`|trend|` → 额外幅度） |
+  | `max_magnitude` | 8.0 | 单次调整幅度上限 |
+  | `b1` | 200.0 | junior ↔ senior 档的能力阈值 |
+  | `b2` | 400.0 | senior ↔ undergraduate 档的能力阈值 |
+  | `buffer` | 20.0 | 滞回缓冲区宽度（防止抖动） |
+  | `ability_min` | 0.0 | 能力分下限 |
+  | `ability_max` | 600.0 | 能力分上限 |
+  | `trend_min` | -1.0 | 趋势下限 |
+  | `trend_max` | 1.0 | 趋势上限 |
+
+- **持久化**：作为 `AppConfig.adaptive_params: AdaptiveParams` 字段加到 `config.json`，`#[serde(default)]` 回退到 `Params::default()`
+- **前端类型**：`src/types/config.ts::AppConfig` 增加 `adaptive_params: AdaptiveParams`；`defaultAppConfig()` 用 `Params::default()` 同步
+- **后端类型**：`src-tauri/src/models/config.rs` 新增 `AdaptiveParams` 结构，字段名一一对应 `adaptive_difficulty::Params`
+- **UI 组件**：`src/components/settings/DifficultyPanel.tsx` 增加「自适应参数」可折叠子区域；展开显示 15 个数字输入框 + 「恢复默认」按钮（一键还原为 crate `Params::default()` 值）
+- **运行时使用**：`score_full_test` 调用前从全局只读位置读取 `Params`（启动加载一次）；不暴露新后端命令，UI 直接编辑 `config.json::adaptive_params`
+- **约束**：修改后必须点击「保存配置」才会生效；保存前仅在内存中预览
+
+### 11.3 难度 Tab 显示当前能力分
+
+> **冲突说明**：§7.5 第 4 条提到「只读读数」但未明确字段与位置；本节明确。
+
+- **字段**：
+  - `ability_score`（1 位小数）
+  - `trend`（2 位小数）
+  - `update_count`
+  - `current_level`（中文标签：初中 / 高中 / 大学）
+- **位置**：难度 Tab 的自适应参数子区域**之上**，作为**固定卡片**（不可折叠），无论开关状态都可见
+- **数据来源**：后端 `commands/adaptive.rs::get_adaptive_state` → 返回 `AdaptiveStatePayload { ability_score, trend, current_level, update_count }`；前端在 `DifficultyPanel` 挂载时调一次，并在收到 `adaptive-level-changed` / `adaptive-state-reset` 事件时刷新
+
+### 11.4 关闭自动模式时自动重置
+
+> **冲突说明**：§7.5 「重置自适应状态」按钮行为保留；本节描述**开关切换动作本身**的副作用。
+
+- 「自动切换难度」开关从 `auto` → `manual` 的瞬间，**自动**执行一次 `adaptive_difficulty::reset_to(&mut state, current_manual_level)`：
+  - `ability_score = current_manual_level.initial_ability()`（即 100 / 300 / 500）
+  - `trend = 0.0`
+  - `current_level = current_manual_level`
+  - `update_count` **保留**（保持累计历史，不归零）
+- 「重置自适应状态」按钮行为保留，仅在 `mode = Auto` 时**可见**（手动模式下不渲染）；供用户在自动模式下手动清零
+- **持久化**：切换 / 重置后立即落盘 `adaptive_state.json`（与 §4.4.8 一致）
+- **UI 反馈**：
+  - 切换瞬间弹 toast「已切换到手动档，已重置自适应变量」
+  - 按钮点击弹 toast「已重置自适应状态」
+
+### 11.5 结算页能力分升 / 降可视化
+
+> **冲突说明**：§7.4 已提「自适应档位卡片」与 trace 折叠；本节新增视觉规则。
+
+- 总分卡片**右侧**增加一枚「能力分变化」徽章：
+  - `ability_after > ability_before` → 绿色 `↑ +{Δability}`（保留 1 位小数）
+  - `ability_after < ability_before` → 红色 `↓ -{Δability}`
+  - `ability_after == ability_before` → 灰色 `→ 0.0`
+  - `is_retest = true` → 徽章显示「本次为重新测试，未调整能力」
+- 现有「自适应档位卡片」同步增加「升 ⬆ / 降 ⬇ / 维持 →」箭头
+- **数据来源**：`TestResult.adaptive: Option<AdaptiveSummary>` 已有能力分变化；前端在 `Result.tsx` 渲染时读取 `adaptive.ability_before` / `adaptive.ability_after` / `result.is_retest`
+- **is_retest 透传**：`useResultStore::load(is_retest)` → `scoreFullTest(is_retest)` → 后端写入 `TestResult.is_retest`，前端据此决定徽章文案
+
+### 11.6 模式切换时不清空 AdaptiveState 的旧规则不变
+
+> **冲突说明**：CLAUDE.md §4.4.8 已说「切换瞬间不重置 AdaptiveState」；本节**进一步明确**方向性 —— 仅 `auto → manual` 重置，`manual → auto` 不重置，与 11.4 互补。
+
+- 从 `manual` → `auto` 时**不**重置 —— 保留前一次自动档下的 ability_score / trend（手动模式下算法不调用 `update`，但 `adaptive_state.json` 中的旧值仍在）
+- 实际效果：用户在手动档下做几套题（不更新 ability），切回自动档后下一次 `score_full_test` 用切换前最后一次的 ability / trend 继续
+- 与 11.4 不冲突：11.4 描述 `auto → manual` 触发重置；本节描述 `manual → auto` 不触发

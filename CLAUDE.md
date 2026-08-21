@@ -55,6 +55,7 @@
 | futures | 0.3 | StreamExt（SSE 流解析） |
 | uuid | 1（v4 | 会话标识 |
 | thiserror / anyhow | - | 错误处理 |
+| adaptive_difficulty | workspace path `src-tauri/adaptive_difficulty` | 自适应难度算法 crate（纯函数 + 内部状态机，详见 §4.4.8） |
 
 ### 2.3 数据存储
 
@@ -79,12 +80,12 @@ peiyuan/
 ├── src/                              # 前端 React + TS
 │   ├── components/
 │   │   ├── ui/                       # shadcn/ui 基础组件（button, card, input, tabs, ...）+ ConfirmDialog
-│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / LlmParamsPanel / TimingPanel / DifficultyPanel
+│   │   ├── settings/                 # ModelConfigForm / PromptEditor / MicTest / KeyboardTest / AudioSettingsPanel / LlmParamsPanel / TimingPanel / DifficultyPanel（含自适应开关 / 重置 / 只读读数，v1.1+ 见 §4.4.8）
 │   │   ├── test/                     # GlobalHeader / PhaseCountdown / QuestionDisplay / FillBlankTable / RecorderPanel
 │   │   ├── ErrorBoundary.tsx
 │   │   └── Toast.tsx
 │   ├── pages/                         # MainMenu / Settings / Test / Result
-│   ├── store/                         # Zustand: settings / test / testFlow / result / confirm
+│   ├── store/                         # Zustand: settings / test / testFlow / result / confirm / adaptive（v1.1+：mode 镜像 + state 只读快照，详见 §4.4.8）
 │   ├── hooks/                         # useTimerEvent / useAudioPlayer / useRecorder / useGenerationProgress / useTestFlowEvents
 │   ├── types/                         # TypeScript 类型（与 Rust models/ 对齐）
 │   ├── lib/                           # tauri invoke 封装 + utils
@@ -103,7 +104,8 @@ peiyuan/
 │   │   │   ├── device.rs              # list_input/output_devices / test_input/output_device
 │   │   │   ├── test_session.rs        # generate_test_session / get_test_session / clear_test_session
 │   │   │   ├── test_flow.rs           # start_test_flow / submit_answer / get_flow_state / get_answer_set / reset_test_flow / skip_to_next / notify_recording_completed
-│   │   │   └── scoring.rs             # score_full_test
+│   │   │   ├── scoring.rs             # score_full_test（末尾触发 adaptive::update，见 §4.4.8）
+│   │   │   └── adaptive.rs            # get_adaptive_state / reset_adaptive_state / set_adaptive_mode（v1.1+，详见 §4.4.8）
 │   │   ├── services/                  # 内部服务层（与 commands 一一对应或多个合并）
 │   │   │   ├── http_client.rs
 │   │   │   ├── llm_service.rs         # 流式 LLM + SSE 拼接
@@ -114,7 +116,8 @@ peiyuan/
 │   │   │   ├── prompt_engine_service.rs # 占位符替换
 │   │   │   ├── question_generator.rs  # LLM 出题
 │   │   │   ├── recorder.rs            # cpal 录音（worker 线程 + 共享 Arc；支持 downmix_to_mono + linear_resample，见 §4.4.10）
-│   │   │   ├── scoring.rs             # 1-14 本地 / 15-18 LLM JSON 每空评分（见 §4.4.12） / 19 STT+LLM
+│   │   │   ├── scoring.rs             # 1-14 本地 / 15-18 LLM JSON 每空评分（见 §4.4.12） / 19 STT+LLM；末尾触发 adaptive::update
+│   │   │   ├── adaptive.rs            # adaptive_difficulty crate 包装 + AdaptiveState 持久化（v1.1+，详见 §4.4.8）
 │   │   │   ├── test_flow.rs           # 状态机编排
 │   │   │   ├── test_session.rs        # 测试会话生成
 │   │   │   ├── timer.rs               # 精确计时 + 事件推送
@@ -122,7 +125,7 @@ peiyuan/
 │   │   ├── models/                    # 数据结构
 │   │   │   ├── config.rs              # AppConfig / ModelConfig / LlmParams / PromptConfig / AudioConfig / TimingConfig（见 §4.4.8）
 │   │   │   ├── question.rs            # ShortDialogue / LongDialogue / Monologue / RetellMaterial / TestSession
-│   │   │   └── result.rs              # McqResult / BlankResult / RetellResult / TestResult
+│   │   │   └── result.rs              # McqResult / BlankResult / RetellResult / TestResult / AdaptiveSummary（v1.1+，详见 §4.4.8）
 │   │   ├── utils/
 │   │   │   ├── json_extract.rs       # 剥离 ```json 围栏 + 容错解析
 │   │   │   ├── path.rs                # 应用数据目录
@@ -137,7 +140,11 @@ peiyuan/
 │   │   ├── q15_18.txt
 │   │   ├── q15_18_scoring.txt
 │   │   └── q19_scoring.txt
-│   ├── Cargo.toml
+│   ├── adaptive_difficulty/       # workspace member：自适应算法 crate（v1.1+，详见 §4.4.8）
+│   │   ├── Cargo.toml
+│   │   ├── src/{lib,state,level,params,hysteresis,algorithm,trace,error}.rs
+│   │   └── README.md / INTEGRATION.md
+│   ├── Cargo.toml                 # workspace manifest，members = [".", "adaptive_difficulty"]（v1.1+）
 │   ├── tauri.conf.json                # 含 assetProtocol.scope: ["**"]
 │   ├── capabilities/default.json
 │   └── build.rs
@@ -176,6 +183,8 @@ peiyuan/
 | `FlowStateInner.skip_requested` | `Arc<AtomicBool>` | 单次 run_* | 「下一题」信号位，interruptible_sleep 轮询 |
 | `FlowStateInner.recording_completed` | `Arc<AtomicBool>` | 单次 run_* | 「提前结束录音」信号位，interruptible_sleep 轮询 |
 | `FlowStateInner.group_membership` | `HashMap<u32, u32>` | 单次 run_* | 内部：题号 → 组号（用于 5-12 题共享 ANSWERING 时段） |
+| `AdaptiveState` | `RwLock<adaptive_difficulty::AdaptiveState>` | 整个 App | 自适应难度运行时状态（ability_score / trend / current_level / update_count），启动时从 `adaptive_state.json` 加载，详见 §4.4.8 |
+| `AdaptiveMode` | `RwLock<AdaptiveMode>`（`Auto` / `Manual`，默认 `Manual`） | 整个 App | 自适应开关（持久化到 `config.json::difficulty.mode`） |
 
 ### 4.3 后端事件命名
 
@@ -189,6 +198,8 @@ peiyuan/
 | `test-audio-play` | `{path, loop}` | 通知前端播放（实际播放由后端 rodio 完成）。**两次 PLAYING 之间的静音间隔会以 `{ path: null }` 发射一次**，前端需据此重置进度 |
 | `test-record-start` | `{durationMs}` | 进入 19 题录音阶段 |
 | `test-record-stop` | - | 录音结束 |
+| `adaptive-level-changed` | `{from: String, to: String, ability: f64, trend: f64, update_count: u64}` | 自适应算法升级/降档后立即发射，前端用于结算页高亮与难度 Tab 同步刷新 |
+| `adaptive-state-reset` | `{new_level: String, ability: f64, trend: f64}` | 用户点击「重置自适应状态」后发射 |
 | `test-score-progress` | `{stage, message}`（`stage ∈ {"mcq","blanks","retell","done"}`） | **已定义但当前未发射**（详见 §六） |
 
 ### 4.4 关键设计决策
@@ -224,6 +235,59 @@ cpal::Stream 标记为 `!Send + !Sync`，无法在 Tauri State 中直接保存�
 日志/预览中涉及字符串截断时，必须按字符而非字节切割（避免多字节字符中间 panic）。
 - 前端使用 `src/lib/utils.ts::truncate(s, max)`。
 - 后端日志直接打印完整字符串，不再做截断（日志已落盘，原 `truncate_chars` 工具已删除）。
+
+#### 4.4.8 自适应难度集成（v1.1+）
+
+- **算法 crate**：`src-tauri/adaptive_difficulty/`，零运行时依赖（仅 `serde` / `serde_json` / `thiserror`），纯函数 `update` + 内部 `AdaptiveState`
+- **Cargo 接入**：`src-tauri/Cargo.toml` 升级为 workspace 根，`[workspace] members = [".", "adaptive_difficulty"]`；主 crate 加 `adaptive_difficulty = { path = "adaptive_difficulty" }`
+- **输入分数规整**：在 `services/scoring.rs::score_full_test` 末尾，把 `TestResult` 转换为 `(a, b, c)` 三元组：
+  - `a = correct_count_1_to_14 as f64 / 14.0`
+  - `b = blanks_total_score as f64 / 6.0`
+  - `c = q19_score as f64 / 10.0`
+  - 三者均 `clamp` 到 `[0, 1]` 后再传入 crate
+- **调用顺序**（伪代码）：
+  ```rust
+  let a = correct_1_14 as f64 / 14.0;
+  let b = blanks_score as f64 / 6.0;
+  let c = q19_score as f64 / 10.0;
+
+  let mut guard = adaptive_state.write().await;            // RwLock
+  let trace = adaptive_difficulty::update(&mut guard, a, b, c)?;
+  drop(guard);
+
+  persist_adaptive_state(&app, &guard)?;                   // tempfile + rename 原子写
+  if trace.level_before != trace.level_after {
+      app.emit("adaptive-level-changed", AdaptiveLevelChangedPayload::from(&trace))?;
+  }
+  result.adaptive = Some(AdaptiveSummary::from(&trace));   // 加到 TestResult
+  Ok(result)
+  ```
+- **下一次出题读取**：`commands/test_session.rs::generate_test_session` 在注入 `{{DIFFICULTY_DEMAND_*}}` 时调用 `effective_level()`：
+  ```rust
+  fn effective_level(state: &AdaptiveState, mode: &AdaptiveMode, manual: &str) -> String {
+      match mode {
+          AdaptiveMode::Auto   => state.current_level.as_str().to_string(),
+          AdaptiveMode::Manual => manual.to_string(),
+      }
+  }
+  ```
+- **UI 互斥**（重点）：`DifficultyPanel` 中「自动切换难度」开关与手动档下拉框是 mutually exclusive：
+  - 开关 ON → 下拉框 `disabled`（greyed out），提示「已启用自动档」
+  - 开关 OFF → 下拉框 `enabled`，可手动切档
+  - 切换瞬间不重置 AdaptiveState；用户切回 Auto 时继续使用上次计算结果
+- **容错**：`AdaptiveError` → `Result<TestResult, AppError>`，前端弹 toast「自适应更新失败」；state 不被错误路径修改；下一次测试仍使用旧档位
+- **持久化**：
+  - 运行时态：`{app_data_dir}/adaptive_state.json`，结构 `{ "ability_score": f64, "trend": f64, "current_level": String, "update_count": u64 }`，使用 `tempfile + rename` 原子写
+  - 配置项：`config.json::difficulty.mode = "auto" | "manual"`（默认 `"manual"`），与现有 `DifficultyConfig` 同级，`#[serde(default)]` 回退
+- **启动加载**：`lib.rs` Builder `setup` 中读 `adaptive_state.json` → `validate_loaded`；校验失败 → `reset_to(JuniorHigh)`；同时把 state 注入 Tauri State
+- **重置按钮**：`commands/adaptive.rs::reset_adaptive_state` 调用 `adaptive_difficulty::reset_to(&mut state, level)`，其中 `level` 来源：
+  - 若当前 mode = Manual → 使用 `config.difficulty.level`（手动档值）
+  - 若当前 mode = Auto   → 强制 `JuniorHigh`（避免破坏自动档语义）
+- **与 `DifficultyConfig` 的关系**：
+  - 旧 `DifficultyConfig.level`（String）保留 = **手动档 / 初始档 / 兜底档**
+  - 新 `AdaptiveState.current_level` = **下一次实际使用档（mode = Auto 时）**
+  - `DifficultyDemand` 三档文字不变；UI 在「设置 → 难度」Tab 同时展示手动档（可编辑或 disabled）与自适应档（只读）
+  - `inject_difficulty_vars` 调用方改为读取 `effective_level()`，不再是裸 `config.difficulty.level`（**Prompt 模板本体不变**，仅改变量来源；详见 Spec.md §5.5）
 
 
 ### 4.5 模块分层
@@ -298,6 +362,17 @@ npm run tauri:build -- --target x86_64-unknown-linux-gnu # Linux
 
 详见 [README.md](./README.md)。
 
+### 5.3 自适应 crate 工作区成员（v1.1+）
+
+- `src-tauri/Cargo.toml` 的 `[workspace] members = [".", "adaptive_difficulty"]`
+- 单独测试 crate：`cd src-tauri && cargo test -p adaptive_difficulty`
+- crate API 速查（详见 `src-tauri/adaptive_difficulty/README.md`）：
+  - `AdaptiveState { ability_score, trend, current_level, update_count }`
+  - `Level::{JuniorHigh, SeniorHigh, Undergraduate}`（序列化 snake_case 字符串）
+  - `update(&mut state, a, b, c) -> Result<UpdateTrace, AdaptiveError>`
+  - `reset_to(&mut state, level)` / `validate_loaded(state)`
+  - `Params::default()` 返回生产参数（权重 0.5/0.2/0.3、`score_floor 0.6`、`alpha 0.4`、滞回阈值 200/400、`buffer 20`）
+
 ---
 
 ## 六、已知问题 / 死代码
@@ -323,3 +398,4 @@ npm run tauri:build -- --target x86_64-unknown-linux-gnu # Linux
 - 15-18 题评分：每空 LLM JSON 评分（0 或 1.5 分），详见 §4.4.12
 - 总分 30（14 + 6 + 10），自动评分
 - 跨平台 Windows / macOS / Linux
+- 自适应难度（v1.1+）：每次测试后由 `adaptive_difficulty` crate 自动调整下次难度档位（含 EMA 能力分更新与滞回阈值）；设置 → 难度 Tab 提供「自动切换难度」开关（默认关闭），开启时手动档下拉框自动禁用。详见 Spec.md §3.6 / §5.5 / §6.5 / §7.5，技术细节见本文件 §4.4.8
